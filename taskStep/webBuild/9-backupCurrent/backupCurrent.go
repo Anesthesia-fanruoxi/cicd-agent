@@ -12,25 +12,31 @@ import (
 
 // BackupCurrentStep 备份当前版本步骤
 type BackupCurrentStep struct {
-	project  string
-	tag      string
-	category string
-	ctx      context.Context
+	project    string
+	tag        string
+	category   string
+	ctx        context.Context
+	taskLogger *common.TaskLogger
 }
 
 // NewBackupCurrentStep 创建备份当前版本步骤
-func NewBackupCurrentStep(project, tag, category string, ctx context.Context) *BackupCurrentStep {
+func NewBackupCurrentStep(project, tag, category string, ctx context.Context, taskLogger *common.TaskLogger) *BackupCurrentStep {
 	return &BackupCurrentStep{
-		project:  project,
-		tag:      tag,
-		category: category,
-		ctx:      ctx,
+		project:    project,
+		tag:        tag,
+		category:   category,
+		ctx:        ctx,
+		taskLogger: taskLogger,
 	}
 }
 
 // Execute 执行备份当前版本
 func (b *BackupCurrentStep) Execute() error {
-	common.AppLogger.Info(fmt.Sprintf("开始执行备份当前版本步骤: 项目=%s, 标签=%s, 分类=%s", b.project, b.tag, b.category))
+	logMsg := fmt.Sprintf("开始执行备份当前版本步骤: 项目=%s, 标签=%s, 分类=%s", b.project, b.tag, b.category)
+	common.AppLogger.Info(logMsg)
+	if b.taskLogger != nil {
+		b.taskLogger.WriteStep("backupCurrent", "INFO", logMsg)
+	}
 
 	// 获取web目录和备份目录路径
 	webPath := b.getWebPath()

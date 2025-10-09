@@ -11,12 +11,16 @@ import (
 
 // ImagePusher 镜像推送器
 type ImagePusher struct {
-	taskID string
+	taskID     string
+	taskLogger *common.TaskLogger
 }
 
 // NewImagePusher 创建镜像推送器
-func NewImagePusher(taskID string) *ImagePusher {
-	return &ImagePusher{taskID: taskID}
+func NewImagePusher(taskID string, taskLogger *common.TaskLogger) *ImagePusher {
+	return &ImagePusher{
+		taskID:     taskID,
+		taskLogger: taskLogger,
+	}
 }
 
 // PushImages 并发推送镜像（可取消）
@@ -26,7 +30,9 @@ func (p *ImagePusher) PushImages(ctx context.Context, images []string) error {
 	}
 
 	maxConcurrency := p.calculatePushConcurrency(len(images))
-	common.AppLogger.Info(fmt.Sprintf("推送镜像: 总数=%d, 并发数=%d", len(images), maxConcurrency))
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pushLocal", "INFO", fmt.Sprintf("推送镜像: 总数=%d, 并发数=%d", len(images), maxConcurrency))
+	}
 
 	semaphore := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
@@ -68,26 +74,37 @@ func (p *ImagePusher) PushImages(ctx context.Context, images []string) error {
 		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("所有镜像推送完成: %d个", len(images)))
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pushLocal", "INFO", fmt.Sprintf("所有镜像推送完成: %d个", len(images)))
+	}
 	return nil
 }
 
 // pushSingleImage 推送单个镜像
 func (p *ImagePusher) pushSingleImage(ctx context.Context, image string) error {
-	common.AppLogger.Info(fmt.Sprintf("开始推送镜像: %s", image))
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pushLocal", "INFO", fmt.Sprintf("开始推送镜像: %s", image))
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", "push", image)
 	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if p.taskLogger != nil {
+		p.taskLogger.WriteCommand("pushLocal", "docker push "+image, output, err)
+	}
 
 	if err != nil {
 		// 检查是否是上下文取消导致的错误
 		if ctx.Err() == context.Canceled {
 			return fmt.Errorf("推送镜像 %s 被取消", image)
 		}
-		return fmt.Errorf("推送镜像 %s 失败: %v, 输出: %s", image, err, string(output))
+		return fmt.Errorf("推送镜像 %s 失败: %v", image, err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("成功推送镜像: %s", image))
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pushLocal", "INFO", fmt.Sprintf("成功推送镜像: %s", image))
+	}
 	return nil
 }
 
@@ -109,9 +126,9 @@ func (p *ImagePusher) calculatePushConcurrency(imageCount int) int {
 	return maxConcurrency
 }
 
-// PushImages 推送镜像列表（包装函数）
+// PushImages 推送镜像列表（包装函数，无日志记录）
 func PushImages(ctx context.Context, images []string) error {
-	// 使用空的taskID，因为这是包装函数
-	pusher := NewImagePusher("")
+	// 使用空的taskID和nil logger，因为这是包装函数
+	pusher := NewImagePusher("", nil)
 	return pusher.PushImages(ctx, images)
 }

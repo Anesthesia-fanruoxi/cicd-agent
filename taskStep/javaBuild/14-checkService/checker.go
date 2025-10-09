@@ -13,22 +13,28 @@ import (
 
 // ServiceChecker 服务检查器
 type ServiceChecker struct {
-	taskID string
+	taskID     string
+	taskLogger *common.TaskLogger
 }
 
 // NewServiceChecker 创建服务检查器
-func NewServiceChecker(taskID string) *ServiceChecker {
+func NewServiceChecker(taskID string, taskLogger *common.TaskLogger) *ServiceChecker {
 	return &ServiceChecker{
-		taskID: taskID,
+		taskID:     taskID,
+		taskLogger: taskLogger,
 	}
 }
 
 // CheckServicesReady 检查服务就绪状态
 func (c *ServiceChecker) CheckServicesReady(ctx context.Context, services []string, namespace string) error {
-	common.AppLogger.Info(fmt.Sprintf("开始检查命名空间 %s 下所有pod的就绪状态", namespace))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("开始检查命名空间 %s 下所有pod的就绪状态", namespace))
+	}
 
 	// 先等待15秒让pod生成
-	common.AppLogger.Info("等待15秒让pod生成...")
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", "等待15秒让pod生成...")
+	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
@@ -37,6 +43,397 @@ func (c *ServiceChecker) CheckServicesReady(ctx context.Context, services []stri
 
 	// 循环检查pod状态，直到所有pod就绪或超时
 	return c.checkPodsWithRetry(ctx, namespace)
+}
+
+// isPodNormalState 判断Pod是否处于正常状态（只有ContainerCreating和Running算正常）
+func (c *ServiceChecker) isPodNormalState(status string) bool {
+	normalStates := []string{
+		"Pending",
+		"ContainerCreating", // 容器创建中
+		"Running",           // 运行中
+	}
+
+	for _, normalState := range normalStates {
+		if status == normalState {
+			return true
+		}
+	}
+	return false
+}
+
+// scaleDownFailedControllers 缩容失败的控制器到0个副本
+func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespace string) error {
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("=== 开始执行缩容操作 ==="))
+		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容目标命名空间: %s", namespace))
+	}
+
+	// 获取失败的Pod及其对应的控制器
+	failedControllers, err := c.getFailedControllers(ctx, namespace)
+	if err != nil {
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("获取失败控制器列表失败: %v", err))
+		}
+		return err
+	}
+
+	if len(failedControllers) == 0 {
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", "没有发现需要缩容的失败控制器")
+		}
+		return nil
+	}
+
+	// 缩容失败的控制器
+	for controllerType, controllers := range failedControllers {
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容失败的%s: %v", controllerType, controllers))
+		}
+
+		switch controllerType {
+		case "Deployment":
+			for _, name := range controllers {
+				if err := c.scaleDownSpecificDeployment(ctx, namespace, name); err != nil {
+					if c.taskLogger != nil {
+						c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容Deployment %s 失败: %v", name, err))
+					}
+				}
+			}
+		case "ReplicaSet":
+			for _, name := range controllers {
+				if err := c.scaleDownSpecificReplicaSet(ctx, namespace, name); err != nil {
+					if c.taskLogger != nil {
+						c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容ReplicaSet %s 失败: %v", name, err))
+					}
+				}
+			}
+		case "StatefulSet":
+			for _, name := range controllers {
+				if err := c.scaleDownSpecificStatefulSet(ctx, namespace, name); err != nil {
+					if c.taskLogger != nil {
+						c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容StatefulSet %s 失败: %v", name, err))
+					}
+				}
+			}
+		}
+	}
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("=== 缩容操作执行完成 ==="))
+	}
+	return nil
+}
+
+// getFailedControllers 获取失败Pod对应的控制器
+func (c *ServiceChecker) getFailedControllers(ctx context.Context, namespace string) (map[string][]string, error) {
+	// 获取所有非Running状态的Pod及其控制器信息
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", namespace,
+		"--field-selector=status.phase!=Running", "--no-headers",
+		"-o", "custom-columns=NAME:.metadata.name,CONTROLLER:.metadata.ownerReferences[0].name,KIND:.metadata.ownerReferences[0].kind")
+
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		if strings.Contains(string(output), "No resources found") {
+			return make(map[string][]string), nil
+		}
+		return nil, fmt.Errorf("获取失败Pod信息失败: %v, 输出: %s", err, string(output))
+	}
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", cmd.String(), output, err)
+	}
+
+	failedControllers := make(map[string][]string)
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) >= 3 {
+			podName := parts[0]
+			controllerName := parts[1]
+			controllerKind := parts[2]
+
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("发现失败Pod: %s, 控制器: %s (%s)", podName, controllerName, controllerKind))
+			}
+
+			// 收集需要缩容的控制器
+			if controllerName != "<none>" && controllerKind != "<none>" {
+				if _, exists := failedControllers[controllerKind]; !exists {
+					failedControllers[controllerKind] = []string{}
+				}
+
+				// 避免重复添加
+				found := false
+				for _, existing := range failedControllers[controllerKind] {
+					if existing == controllerName {
+						found = true
+						break
+					}
+				}
+				if !found {
+					failedControllers[controllerKind] = append(failedControllers[controllerKind], controllerName)
+				}
+			}
+		}
+	}
+
+	return failedControllers, nil
+}
+
+// scaleDownSpecificDeployment 缩容指定的Deployment
+func (c *ServiceChecker) scaleDownSpecificDeployment(ctx context.Context, namespace, name string) error {
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容指定Deployment: %s", name))
+	}
+
+	scaleCmd := exec.CommandContext(ctx, "kubectl", "scale", "deployment", name, "-n", namespace, "--replicas=0")
+	scaleOutput, scaleErr := scaleCmd.CombinedOutput()
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", scaleCmd.String(), scaleOutput, scaleErr)
+	}
+
+	if scaleErr != nil {
+		return fmt.Errorf("缩容Deployment %s 失败: %v, 输出: %s", name, scaleErr, string(scaleOutput))
+	}
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("成功缩容Deployment: %s", name))
+	}
+	return nil
+}
+
+// scaleDownSpecificReplicaSet 缩容指定的ReplicaSet
+func (c *ServiceChecker) scaleDownSpecificReplicaSet(ctx context.Context, namespace, name string) error {
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容指定ReplicaSet: %s", name))
+	}
+
+	scaleCmd := exec.CommandContext(ctx, "kubectl", "scale", "replicaset", name, "-n", namespace, "--replicas=0")
+	scaleOutput, scaleErr := scaleCmd.CombinedOutput()
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", scaleCmd.String(), scaleOutput, scaleErr)
+	}
+
+	if scaleErr != nil {
+		return fmt.Errorf("缩容ReplicaSet %s 失败: %v, 输出: %s", name, scaleErr, string(scaleOutput))
+	}
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("成功缩容ReplicaSet: %s", name))
+	}
+	return nil
+}
+
+// scaleDownSpecificStatefulSet 缩容指定的StatefulSet
+func (c *ServiceChecker) scaleDownSpecificStatefulSet(ctx context.Context, namespace, name string) error {
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容指定StatefulSet: %s", name))
+	}
+
+	scaleCmd := exec.CommandContext(ctx, "kubectl", "scale", "statefulset", name, "-n", namespace, "--replicas=0")
+	scaleOutput, scaleErr := scaleCmd.CombinedOutput()
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", scaleCmd.String(), scaleOutput, scaleErr)
+	}
+
+	if scaleErr != nil {
+		return fmt.Errorf("缩容StatefulSet %s 失败: %v, 输出: %s", name, scaleErr, string(scaleOutput))
+	}
+
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("成功缩容StatefulSet: %s", name))
+	}
+	return nil
+}
+
+// scaleDownDeployments 缩容所有Deployment到0个副本
+func (c *ServiceChecker) scaleDownDeployments(ctx context.Context, namespace string) error {
+	// 获取所有Deployment及其副本数
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "deployment", "-n", namespace, "--no-headers", "-o", "custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas")
+	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", cmd.String(), output, err)
+	}
+
+	if err != nil {
+		// 如果没有Deployment，不算错误
+		if strings.Contains(string(output), "No resources found") {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("命名空间 %s 下没有Deployment", namespace))
+			}
+			return nil
+		}
+		return fmt.Errorf("获取Deployment列表失败: %v, 输出: %s", err, string(output))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+
+		deploymentName := parts[0]
+		replicas := parts[1]
+
+		// 如果副本数已经是0，跳过
+		if replicas == "0" {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("Deployment %s 副本数已为0，跳过缩容", deploymentName))
+			}
+			continue
+		}
+
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容Deployment %s (当前副本:%s) 到0个副本", deploymentName, replicas))
+		}
+		scaleCmd := exec.CommandContext(ctx, "kubectl", "scale", "deployment", deploymentName, "-n", namespace, "--replicas=0")
+		scaleOutput, scaleErr := scaleCmd.CombinedOutput()
+
+		// 写入命令执行日志
+		if c.taskLogger != nil {
+			c.taskLogger.WriteCommand("checkService", scaleCmd.String(), scaleOutput, scaleErr)
+		}
+
+		if scaleErr != nil {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容Deployment %s 失败: %v, 输出: %s", deploymentName, scaleErr, string(scaleOutput)))
+			}
+		} else {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("成功缩容Deployment %s", deploymentName))
+			}
+		}
+	}
+
+	return nil
+}
+
+// scaleDownStatefulSets 缩容所有StatefulSet到0个副本
+func (c *ServiceChecker) scaleDownStatefulSets(ctx context.Context, namespace string) error {
+	// 获取所有StatefulSet
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "statefulset", "-n", namespace, "--no-headers", "-o", "custom-columns=NAME:.metadata.name")
+	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", cmd.String(), output, err)
+	}
+
+	if err != nil {
+		// 如果没有StatefulSet，不算错误
+		if strings.Contains(string(output), "No resources found") {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("命名空间 %s 下没有StatefulSet", namespace))
+			}
+			return nil
+		}
+		return fmt.Errorf("获取StatefulSet列表失败: %v, 输出: %s", err, string(output))
+	}
+
+	statefulsets := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, statefulset := range statefulsets {
+		statefulset = strings.TrimSpace(statefulset)
+		if statefulset == "" {
+			continue
+		}
+
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容StatefulSet %s 到0个副本", statefulset))
+		}
+		scaleCmd := exec.CommandContext(ctx, "kubectl", "scale", "statefulset", statefulset, "-n", namespace, "--replicas=0")
+		scaleOutput, scaleErr := scaleCmd.CombinedOutput()
+
+		// 写入命令执行日志
+		if c.taskLogger != nil {
+			c.taskLogger.WriteCommand("checkService", scaleCmd.String(), scaleOutput, scaleErr)
+		}
+
+		if scaleErr != nil {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容StatefulSet %s 失败: %v, 输出: %s", statefulset, scaleErr, string(scaleOutput)))
+			}
+		} else {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("成功缩容StatefulSet %s", statefulset))
+			}
+		}
+	}
+
+	return nil
+}
+
+// scaleDownReplicaSets 缩容所有ReplicaSet到0个副本
+func (c *ServiceChecker) scaleDownReplicaSets(ctx context.Context, namespace string) error {
+	// 获取所有ReplicaSet及其副本数
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "replicaset", "-n", namespace, "--no-headers", "-o", "custom-columns=NAME:.metadata.name,REPLICAS:.spec.replicas")
+	output, err := cmd.CombinedOutput()
+	if err != nil {
+		// 如果没有ReplicaSet，不算错误
+		if strings.Contains(string(output), "No resources found") {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("命名空间 %s 下没有ReplicaSet", namespace))
+			}
+			return nil
+		}
+		return fmt.Errorf("获取ReplicaSet列表失败: %v, 输出: %s", err, string(output))
+	}
+
+	lines := strings.Split(strings.TrimSpace(string(output)), "\n")
+	for _, line := range lines {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+
+		parts := strings.Fields(line)
+		if len(parts) < 2 {
+			continue
+		}
+
+		replicasetName := parts[0]
+		replicas := parts[1]
+
+		// 如果副本数已经是0，跳过
+		if replicas == "0" {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("ReplicaSet %s 副本数已为0，跳过缩容", replicasetName))
+			}
+			continue
+		}
+
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容ReplicaSet %s (当前副本:%s) 到0个副本", replicasetName, replicas))
+		}
+		scaleCmd := exec.CommandContext(ctx, "kubectl", "scale", "replicaset", replicasetName, "-n", namespace, "--replicas=0")
+		if scaleOutput, scaleErr := scaleCmd.CombinedOutput(); scaleErr != nil {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容ReplicaSet %s 失败: %v, 输出: %s", replicasetName, scaleErr, string(scaleOutput)))
+			}
+		} else {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("成功缩容ReplicaSet %s", replicasetName))
+			}
+		}
+	}
+
+	return nil
 }
 
 // getAllPods 获取命名空间下所有pod名称
@@ -81,28 +478,36 @@ type PodStatus struct {
 // checkPodsWithRetry 两阶段检查：先等待pod Running，再检查服务健康
 func (c *ServiceChecker) checkPodsWithRetry(ctx context.Context, namespace string) error {
 	// 第一阶段：等待所有pod状态变为Running
-	common.AppLogger.Info("开始第一阶段：等待所有pod状态变为Running")
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", "开始第一阶段：等待所有pod状态变为Running")
+	}
 	if err := c.waitForAllPodsRunning(ctx, namespace); err != nil {
 		return fmt.Errorf("第一阶段失败: %v", err)
 	}
 
 	// 第二阶段：检查服务健康状态
-	common.AppLogger.Info("开始第二阶段：检查服务健康状态")
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", "开始第二阶段：检查服务健康状态")
+	}
 	if err := c.checkPodsHealthiness(ctx, namespace); err != nil {
 		return fmt.Errorf("第二阶段失败: %v", err)
 	}
 
-	common.AppLogger.Info("所有pod已就绪，服务检查完成")
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", "所有pod已就绪，服务检查完成")
+	}
 	return nil
 }
 
 // waitForAllPodsRunning 第一阶段：等待所有pod状态变为Running（初筛，连续2次成功）
 func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace string) error {
-	maxWaitDuration := 5 * time.Minute // 最大等待5分钟
+	maxWaitDuration := 3 * time.Minute // 最大等待3分钟
 	checkInterval := 10 * time.Second  // 每10秒检查一次
 
 	deadline := time.Now().Add(maxWaitDuration)
-	common.AppLogger.Info(fmt.Sprintf("第一阶段初筛：等待所有pod变为Running状态，最大等待时间%d分钟，检查间隔%d秒", int(maxWaitDuration.Minutes()), int(checkInterval.Seconds())))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("第一阶段初筛：等待所有pod变为Running状态，最大等待时间%d分钟，检查间隔%d秒", int(maxWaitDuration.Minutes()), int(checkInterval.Seconds())))
+	}
 
 	consecutiveSuccess := 0 // 连续成功次数
 	requiredSuccess := 2    // 需要连续成功2次
@@ -128,6 +533,18 @@ func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace st
 					nonRunningPods = append(nonRunningPods, fmt.Sprintf("%s(%s)", podName, status))
 				}
 			}
+
+			// 超时时也需要进行缩容操作
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("!!! 第一阶段等待超时，触发缩容操作 !!!"))
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("超时详情: 等待pod Running状态超时，非Running的pod: %s", strings.Join(nonRunningPods, ", ")))
+			}
+			if err := c.scaleDownFailedControllers(ctx, namespace); err != nil {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("执行缩容操作时出错: %v", err))
+				}
+			}
+
 			return fmt.Errorf("等待超时，仍有%d个pod未Running: %s", len(nonRunningPods), strings.Join(nonRunningPods, ", "))
 		}
 
@@ -140,13 +557,33 @@ func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace st
 		// 统计各状态数量
 		statusCount := make(map[string]int)
 		totalPods := len(podStates)
-		runningPods := 0
+		normalPods := 0
+		var abnormalPods []string
 
-		for _, status := range podStates {
+		for podName, status := range podStates {
 			statusCount[status]++
-			if status == "Running" {
-				runningPods++
+			if c.isPodNormalState(status) {
+				normalPods++
+			} else {
+				// 所有非正常状态都算异常（包括Pending）
+				abnormalPods = append(abnormalPods, fmt.Sprintf("%s(%s)", podName, status))
 			}
+		}
+
+		// 如果有Pod处于异常状态，立即返回失败
+		if len(abnormalPods) > 0 {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("检测到%d个Pod处于异常状态，立即终止等待", len(abnormalPods)))
+			}
+
+			// 对失败的控制器进行缩容到0个副本
+			if err := c.scaleDownFailedControllers(ctx, namespace); err != nil {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容失败的控制器时出错: %v", err))
+				}
+			}
+
+			return fmt.Errorf("Pod状态异常，异常的Pod: %s", strings.Join(abnormalPods, ", "))
 		}
 
 		// 输出状态统计
@@ -154,22 +591,37 @@ func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace st
 		for status, count := range statusCount {
 			statusParts = append(statusParts, fmt.Sprintf("%s=%d", status, count))
 		}
-		common.AppLogger.Info(fmt.Sprintf("Pod状态统计 - 总数=%d, %s", totalPods, strings.Join(statusParts, ", ")))
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("Pod状态统计 - 总数=%d, %s", totalPods, strings.Join(statusParts, ", ")))
+		}
 
-		// 检查是否所有pod都是Running
+		// 检查是否所有pod都是Running（只有Running状态才算完全就绪）
+		runningPods := 0
+		for _, status := range podStates {
+			if status == "Running" {
+				runningPods++
+			}
+		}
+
 		if runningPods == totalPods && totalPods > 0 {
 			consecutiveSuccess++
-			common.AppLogger.Info(fmt.Sprintf("所有pod都是Running状态 - 连续成功次数: %d/%d", consecutiveSuccess, requiredSuccess))
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("所有pod都是Running状态 - 连续成功次数: %d/%d", consecutiveSuccess, requiredSuccess))
+			}
 
 			// 连续成功达到要求次数，通过初筛
 			if consecutiveSuccess >= requiredSuccess {
-				common.AppLogger.Info("初筛完成：所有pod已连续2次检查都是Running状态")
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "INFO", "初筛完成：所有pod已连续2次检查都是Running状态")
+				}
 				return nil
 			}
 		} else {
 			// 重置连续成功计数
 			if consecutiveSuccess > 0 {
-				common.AppLogger.Info("pod状态不全为Running，重置连续成功计数")
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "INFO", "pod状态不全为Running，重置连续成功计数")
+				}
 				consecutiveSuccess = 0
 			}
 		}
@@ -212,11 +664,13 @@ func (c *ServiceChecker) getAllPodsWithStatus(ctx context.Context, namespace str
 
 // checkPodsHealthiness 第二阶段：检查服务健康状态（每次重新获取pod列表）
 func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace string) error {
-	maxDuration := 3 * time.Minute   // 最大检查时间3分钟
+	maxDuration := 1 * time.Minute   // 最大检查时间3分钟
 	checkInterval := 3 * time.Second // 每3秒检查一轮
 
 	deadline := time.Now().Add(maxDuration)
-	common.AppLogger.Info(fmt.Sprintf("第二阶段健康检查：每轮重新获取pod列表，最大检查时间%d分钟，检查间隔%d秒", int(maxDuration.Minutes()), int(checkInterval.Seconds())))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("第二阶段健康检查：每轮重新获取pod列表，最大检查时间%d分钟，检查间隔%d秒", int(maxDuration.Minutes()), int(checkInterval.Seconds())))
+	}
 
 	// 记录已完成健康检查的pod（跨轮次保持）
 	completedPods := make(map[string]bool)
@@ -245,6 +699,18 @@ func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace str
 					failedPods = append(failedPods, podName)
 				}
 			}
+
+			// 健康检查超时时也需要进行缩容操作
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("!!! 第二阶段健康检查超时，触发缩容操作 !!!"))
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("超时详情: 健康检查超时，未就绪的pod: %s", strings.Join(failedPods, ", ")))
+			}
+			if err := c.scaleDownFailedControllers(ctx, namespace); err != nil {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("执行缩容操作时出错: %v", err))
+				}
+			}
+
 			return fmt.Errorf("健康检查超时，仍有%d个pod未就绪: %s", len(failedPods), strings.Join(failedPods, ", "))
 		}
 
@@ -274,11 +740,15 @@ func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace str
 			}
 		}
 
-		common.AppLogger.Info(fmt.Sprintf("第%d轮检查开始 - 总数=%d, 已完成=%d, 待检查=%d", roundCount, totalPods, readyPods, pendingPods))
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("第%d轮检查开始 - 总数=%d, 已完成=%d, 待检查=%d", roundCount, totalPods, readyPods, pendingPods))
+		}
 
 		// 如果所有pod都已完成健康检查，结束
 		if pendingPods == 0 {
-			common.AppLogger.Info(fmt.Sprintf("第%d轮检查完成 - 所有pod健康检查通过", roundCount))
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("第%d轮检查完成 - 所有pod健康检查通过", roundCount))
+			}
 			return nil
 		}
 
@@ -301,8 +771,10 @@ func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace str
 			}
 		}
 
-		common.AppLogger.Info(fmt.Sprintf("第%d轮检查结果 - 总数=%d, 已完成=%d, 待检查=%d, 本轮新完成=%d",
-			roundCount, totalPods, readyPodsAfter, pendingPodsAfter, len(newlyCompleted)))
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("第%d轮检查结果 - 总数=%d, 已完成=%d, 待检查=%d, 本轮新完成=%d",
+				roundCount, totalPods, readyPodsAfter, pendingPodsAfter, len(newlyCompleted)))
+		}
 
 		// 如果检查后所有pod都完成，结束
 		if pendingPodsAfter == 0 {
@@ -347,7 +819,9 @@ func (c *ServiceChecker) checkPodListHealth(ctx context.Context, namespace strin
 				mu.Lock()
 				completedPods = append(completedPods, pName)
 				mu.Unlock()
-				common.AppLogger.Info(fmt.Sprintf("pod %s 健康检查通过", pName))
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("pod %s 健康检查通过", pName))
+				}
 			} else {
 				// 不记录错误日志，避免日志过多
 			}
@@ -369,7 +843,9 @@ func (c *ServiceChecker) updatePodStatusMap(podStatusMap map[string]*PodStatus, 
 	// 移除已删除的pod
 	for podName := range podStatusMap {
 		if !currentPods[podName] {
-			common.AppLogger.Info(fmt.Sprintf("检测到pod已删除，从检查列表中移除: %s", podName))
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("检测到pod已删除，从检查列表中移除: %s", podName))
+			}
 			delete(podStatusMap, podName)
 		}
 	}
@@ -377,7 +853,9 @@ func (c *ServiceChecker) updatePodStatusMap(podStatusMap map[string]*PodStatus, 
 	// 添加新发现的pod
 	for _, podName := range allPods {
 		if _, exists := podStatusMap[podName]; !exists {
-			common.AppLogger.Info(fmt.Sprintf("检测到新pod，添加到检查列表: %s", podName))
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("检测到新pod，添加到检查列表: %s", podName))
+			}
 			podStatusMap[podName] = &PodStatus{
 				Name:    podName,
 				Ready:   false,
@@ -508,7 +986,9 @@ func (c *ServiceChecker) checkSinglePodHealth(ctx context.Context, namespace, po
 
 // checkPodReady 检查单个pod的就绪状态
 func (c *ServiceChecker) checkPodReady(ctx context.Context, namespace, podName string) error {
-	common.AppLogger.Info(fmt.Sprintf("检查pod %s 就绪状态", podName))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("检查pod %s 就绪状态", podName))
+	}
 
 	// 检查pod是否处于Running状态
 	if err := c.checkPodStatus(ctx, namespace, podName); err != nil {
@@ -520,13 +1000,17 @@ func (c *ServiceChecker) checkPodReady(ctx context.Context, namespace, podName s
 		return fmt.Errorf("健康检查失败: %v", err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("pod %s 健康检查通过", podName))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("pod %s 健康检查通过", podName))
+	}
 	return nil
 }
 
 // checkSingleServiceReady 检查单个服务的就绪状态（保留兼容性）
 func (c *ServiceChecker) checkSingleServiceReady(ctx context.Context, namespace, serviceName string) error {
-	common.AppLogger.Info(fmt.Sprintf("检查服务 %s 就绪状态", serviceName))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("检查服务 %s 就绪状态", serviceName))
+	}
 
 	// 首先获取pod名称
 	podName, err := c.getPodName(ctx, namespace, serviceName)
@@ -544,7 +1028,9 @@ func (c *ServiceChecker) checkSingleServiceReady(ctx context.Context, namespace,
 		return fmt.Errorf("健康检查失败: %v", err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("服务 %s 健康检查通过", serviceName))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("服务 %s 健康检查通过", serviceName))
+	}
 	return nil
 }
 
@@ -562,7 +1048,9 @@ func (c *ServiceChecker) checkPodStatus(ctx context.Context, namespace, podName 
 		return fmt.Errorf("pod状态不是Running，当前状态: %s", status)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("pod %s 状态正常: %s", podName, status))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("pod %s 状态正常: %s", podName, status))
+	}
 	return nil
 }
 
@@ -593,14 +1081,18 @@ func (c *ServiceChecker) getPodName(ctx context.Context, namespace, serviceName 
 			if err == nil {
 				podName := strings.TrimSpace(string(output))
 				if podName != "" {
-					common.AppLogger.Info(fmt.Sprintf("找到服务 %s 对应的pod: %s (使用选择器: %s)", serviceName, podName, selector))
+					if c.taskLogger != nil {
+						c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("找到服务 %s 对应的pod: %s (使用选择器: %s)", serviceName, podName, selector))
+					}
 					return podName, nil
 				}
 			}
 		}
 
 		if i < maxRetries-1 {
-			common.AppLogger.Info(fmt.Sprintf("第%d次尝试未找到服务 %s 的pod，%d秒后重试", i+1, serviceName, int(retryInterval.Seconds())))
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("第%d次尝试未找到服务 %s 的pod，%d秒后重试", i+1, serviceName, int(retryInterval.Seconds())))
+			}
 			select {
 			case <-ctx.Done():
 				return "", ctx.Err()
@@ -612,9 +1104,9 @@ func (c *ServiceChecker) getPodName(ctx context.Context, namespace, serviceName 
 	return "", fmt.Errorf("重试%d次后仍未找到服务 %s 对应的pod", maxRetries, serviceName)
 }
 
-// CheckServices 检查服务列表（包装函数）
+// CheckServices 检查服务列表（包装函数，无日志记录）
 func CheckServices(ctx context.Context, services []string, namespace string) error {
-	// 使用空的taskID，因为这是包装函数
-	checker := NewServiceChecker("")
+	// 使用空的taskID和nil logger，因为这是包装函数
+	checker := NewServiceChecker("", nil)
 	return checker.CheckServicesReady(ctx, services, namespace)
 }

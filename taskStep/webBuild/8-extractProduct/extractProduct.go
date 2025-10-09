@@ -19,22 +19,28 @@ type ExtractProductStep struct {
 	category    string
 	ctx         context.Context
 	zipFilePath string
+	taskLogger  *common.TaskLogger
 }
 
 // NewExtractProductStep 创建解压产物步骤
-func NewExtractProductStep(project, tag, category string, ctx context.Context, zipFilePath string) *ExtractProductStep {
+func NewExtractProductStep(project, tag, category string, ctx context.Context, zipFilePath string, taskLogger *common.TaskLogger) *ExtractProductStep {
 	return &ExtractProductStep{
 		project:     project,
 		tag:         tag,
 		category:    category,
 		ctx:         ctx,
 		zipFilePath: zipFilePath,
+		taskLogger:  taskLogger,
 	}
 }
 
 // Execute 执行解压产物
 func (e *ExtractProductStep) Execute() error {
-	common.AppLogger.Info(fmt.Sprintf("开始执行解压产物步骤: 项目=%s, 标签=%s, 分类=%s", e.project, e.tag, e.category))
+	logMsg := fmt.Sprintf("开始执行解压产物步骤: 项目=%s, 标签=%s, 分类=%s", e.project, e.tag, e.category)
+	common.AppLogger.Info(logMsg)
+	if e.taskLogger != nil {
+		e.taskLogger.WriteStep("extractProduct", "INFO", logMsg)
+	}
 
 	// 检查zip文件是否存在
 	if _, err := os.Stat(e.zipFilePath); os.IsNotExist(err) {

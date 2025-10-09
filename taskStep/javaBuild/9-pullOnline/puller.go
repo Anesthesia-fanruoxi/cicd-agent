@@ -11,12 +11,16 @@ import (
 
 // ImagePuller 镜像拉取器
 type ImagePuller struct {
-	taskID string
+	taskID     string
+	taskLogger *common.TaskLogger
 }
 
 // NewImagePuller 创建镜像拉取器
-func NewImagePuller(taskID string) *ImagePuller {
-	return &ImagePuller{taskID: taskID}
+func NewImagePuller(taskID string, taskLogger *common.TaskLogger) *ImagePuller {
+	return &ImagePuller{
+		taskID:     taskID,
+		taskLogger: taskLogger,
+	}
 }
 
 // PullImages 并发拉取镜像（可取消）
@@ -26,7 +30,11 @@ func (p *ImagePuller) PullImages(ctx context.Context, images []string) error {
 	}
 
 	maxConcurrency := p.calculatePullConcurrency(len(images))
-	common.AppLogger.Info(fmt.Sprintf("拉取镜像: 总数=%d, 并发数=%d", len(images), maxConcurrency))
+	logMsg := fmt.Sprintf("拉取镜像: 总数=%d, 并发数=%d", len(images), maxConcurrency)
+
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", logMsg)
+	}
 
 	semaphore := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
@@ -68,26 +76,38 @@ func (p *ImagePuller) PullImages(ctx context.Context, images []string) error {
 		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("所有镜像拉取完成: %d个", len(images)))
+	successMsg := fmt.Sprintf("所有镜像拉取完成: %d个", len(images))
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", successMsg)
+	}
 	return nil
 }
 
 // pullSingleImage 拉取单个镜像
 func (p *ImagePuller) pullSingleImage(ctx context.Context, image string) error {
-	common.AppLogger.Info(fmt.Sprintf("开始拉取镜像: %s", image))
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("开始拉取镜像: %s", image))
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", "pull", image)
 	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if p.taskLogger != nil {
+		p.taskLogger.WriteCommand("pullOnline", "docker pull "+image, output, err)
+	}
 
 	if err != nil {
 		// 检查是否是上下文取消导致的错误
 		if ctx.Err() == context.Canceled {
 			return fmt.Errorf("拉取镜像 %s 被取消", image)
 		}
-		return fmt.Errorf("拉取镜像 %s 失败: %v, 输出: %s", image, err, string(output))
+		return fmt.Errorf("拉取镜像 %s 失败: %v", image, err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("成功拉取镜像: %s", image))
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("成功拉取镜像: %s", image))
+	}
 	return nil
 }
 
@@ -109,9 +129,9 @@ func (p *ImagePuller) calculatePullConcurrency(imageCount int) int {
 	return maxConcurrency
 }
 
-// PullImages 拉取镜像列表（包装函数）
+// PullImages 拉取镜像列表（包装函数，无日志记录）
 func PullImages(ctx context.Context, images []string) error {
-	// 使用空的taskID，因为这是包装函数
-	puller := NewImagePuller("")
+	// 使用空的taskID和nil logger，因为这是包装函数
+	puller := NewImagePuller("", nil)
 	return puller.PullImages(ctx, images)
 }

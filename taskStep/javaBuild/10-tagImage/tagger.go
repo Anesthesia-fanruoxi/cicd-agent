@@ -10,12 +10,14 @@ import (
 )
 
 // TagImages 标记镜像（可取消）
-func TagImages(ctx context.Context, onlineImages, localImages []string, taskID string) error {
+func TagImages(ctx context.Context, onlineImages, localImages []string, taskID string, taskLogger *common.TaskLogger) error {
 	if len(onlineImages) != len(localImages) {
 		return fmt.Errorf("在线镜像和本地镜像数量不匹配")
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("开始标记镜像，共%d个", len(onlineImages)))
+	if taskLogger != nil {
+		taskLogger.WriteStep("tagImages", "INFO", fmt.Sprintf("开始标记镜像，共%d个", len(onlineImages)))
+	}
 
 	var wg sync.WaitGroup
 	errChan := make(chan error, len(onlineImages))
@@ -31,7 +33,7 @@ func TagImages(ctx context.Context, onlineImages, localImages []string, taskID s
 				return
 			default:
 			}
-			if err := tagSingleImage(ctx, online, local, taskID); err != nil {
+			if err := tagSingleImage(ctx, online, local, taskLogger); err != nil {
 				errChan <- fmt.Errorf("标记镜像失败 %s -> %s: %v", online, local, err)
 			}
 		}(onlineImg, localImages[i])
@@ -47,24 +49,36 @@ func TagImages(ctx context.Context, onlineImages, localImages []string, taskID s
 		}
 	}
 
-	common.AppLogger.Info("镜像标记完成")
+	if taskLogger != nil {
+		taskLogger.WriteStep("tagImages", "INFO", "镜像标记完成")
+	}
 	return nil
 }
 
 // tagSingleImage 标记单个镜像
-func tagSingleImage(ctx context.Context, onlineImage, localImage, taskID string) error {
-	common.AppLogger.Info(fmt.Sprintf("标记镜像: %s -> %s", onlineImage, localImage))
+func tagSingleImage(ctx context.Context, onlineImage, localImage string, taskLogger *common.TaskLogger) error {
+	if taskLogger != nil {
+		taskLogger.WriteStep("tagImages", "INFO", fmt.Sprintf("标记镜像: %s -> %s", onlineImage, localImage))
+	}
 
 	cmd := exec.CommandContext(ctx, "docker", "tag", onlineImage, localImage)
 	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if taskLogger != nil {
+		taskLogger.WriteCommand("tagImages", fmt.Sprintf("docker tag %s %s", onlineImage, localImage), output, err)
+	}
+
 	if err != nil {
 		// 检查是否是上下文取消导致的错误
 		if ctx.Err() == context.Canceled {
 			return fmt.Errorf("标记镜像 %s 被取消", onlineImage)
 		}
-		return fmt.Errorf("docker tag命令执行失败: %v, 输出: %s", err, string(output))
+		return fmt.Errorf("docker tag命令执行失败: %v", err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("镜像标记成功: %s -> %s", onlineImage, localImage))
+	if taskLogger != nil {
+		taskLogger.WriteStep("tagImages", "INFO", fmt.Sprintf("镜像标记成功: %s -> %s", onlineImage, localImage))
+	}
 	return nil
 }

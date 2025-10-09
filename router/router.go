@@ -18,22 +18,22 @@ func SetupRouter() *gin.Engine {
 	r.Use(gin.Recovery())
 
 	// API路由组
-	api := r.Group("/")
+	apiGroup := r.Group("/")
 	{
 		// /update 接口 - 只需要IP白名单验证
-		api.POST("/update",
+		apiGroup.POST("/update",
 			common.IPWhitelistMiddleware(),
 			taskCenter.HandleUpdate,
 		)
 
 		// /callback 接口 - 只需要IP白名单验证
-		api.POST("/callback",
+		apiGroup.POST("/callback",
 			common.IPWhitelistMiddleware(),
 			taskCenter.HandleCallback,
 		)
 
 		// /cancel 接口 - 只需要IP白名单验证
-		api.POST("/api/task/cancel",
+		apiGroup.POST("/api/task/cancel",
 			common.IPWhitelistMiddleware(),
 			taskCenter.HandleCancel,
 		)
@@ -46,6 +46,9 @@ func SetupRouter() *gin.Engine {
 			"msg":    "服务运行正常",
 		})
 	})
+
+	// WebSocket日志查看接口
+	r.GET("/ws/task/logs", common.TaskLogWebSocket)
 
 	return r
 }

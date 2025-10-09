@@ -16,12 +16,16 @@ import (
 
 // ServiceDeployer 服务部署器
 type ServiceDeployer struct {
-	taskID string
+	taskID     string
+	taskLogger *common.TaskLogger
 }
 
 // NewServiceDeployer 创建服务部署器
-func NewServiceDeployer(taskID string) *ServiceDeployer {
-	return &ServiceDeployer{taskID: taskID}
+func NewServiceDeployer(taskID string, taskLogger *common.TaskLogger) *ServiceDeployer {
+	return &ServiceDeployer{
+		taskID:     taskID,
+		taskLogger: taskLogger,
+	}
 }
 
 // DeployServices 部署服务（可取消）
@@ -38,11 +42,15 @@ func (d *ServiceDeployer) DeployServicesWithCategory(ctx context.Context, deploy
 	}
 
 	if len(yamlFiles) == 0 {
-		common.AppLogger.Info("没有找到需要部署的YAML文件")
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployService", "INFO", "没有找到需要部署的YAML文件")
+		}
 		return nil
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("找到 %d 个YAML文件需要处理", len(yamlFiles)))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("找到 %d 个YAML文件需要处理", len(yamlFiles)))
+	}
 
 	// 并发处理YAML文件
 	var wg sync.WaitGroup
@@ -85,7 +93,9 @@ func (d *ServiceDeployer) DeployServicesWithCategory(ctx context.Context, deploy
 		}
 	}
 
-	common.AppLogger.Info("所有YAML文件处理完成")
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployService", "INFO", "所有YAML文件处理完成")
+	}
 
 	// 执行kubectl apply应用所有部署文件
 	if err := d.applyDeployments(ctx, deployDir, project, category); err != nil {
@@ -120,7 +130,9 @@ func (d *ServiceDeployer) getYamlFiles(deployDir string) ([]string, error) {
 
 // updateYamlFile 更新YAML文件中的镜像标签
 func (d *ServiceDeployer) updateYamlFile(filePath, project, newTag string) error {
-	common.AppLogger.Info(fmt.Sprintf("开始处理文件: %s", filePath))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("开始处理文件: %s", filePath))
+	}
 
 	// 读取文件内容
 	file, err := os.Open(filePath)
@@ -149,8 +161,10 @@ func (d *ServiceDeployer) updateYamlFile(filePath, project, newTag string) error
 			oldTag := matches[3]
 			newLine := matches[1] + matches[2] + ":" + newTag
 
-			common.AppLogger.Info(fmt.Sprintf("文件 %s: 更新镜像标签 %s -> %s",
-				filepath.Base(filePath), oldTag, newTag))
+			if d.taskLogger != nil {
+				d.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("文件 %s: 更新镜像标签 %s -> %s",
+					filepath.Base(filePath), oldTag, newTag))
+			}
 
 			lines = append(lines, newLine)
 			updated = true
@@ -169,9 +183,13 @@ func (d *ServiceDeployer) updateYamlFile(filePath, project, newTag string) error
 		if err := os.WriteFile(filePath, []byte(content), 0644); err != nil {
 			return fmt.Errorf("写入文件失败: %v", err)
 		}
-		common.AppLogger.Info(fmt.Sprintf("文件 %s 更新完成", filepath.Base(filePath)))
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("文件 %s 更新完成", filepath.Base(filePath)))
+		}
 	} else {
-		common.AppLogger.Info(fmt.Sprintf("文件 %s 无需更新", filepath.Base(filePath)))
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("文件 %s 无需更新", filepath.Base(filePath)))
+		}
 	}
 
 	return nil
@@ -179,7 +197,9 @@ func (d *ServiceDeployer) updateYamlFile(filePath, project, newTag string) error
 
 // applyDeployments 执行kubectl apply应用部署文件
 func (d *ServiceDeployer) applyDeployments(ctx context.Context, deployDir, project, category string) error {
-	common.AppLogger.Info(fmt.Sprintf("开始应用部署文件，目录: %s, 项目: %s, 分类: %s", deployDir, project, category))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("开始应用部署文件，目录: %s, 项目: %s, 分类: %s", deployDir, project, category))
+	}
 
 	var cmd *exec.Cmd
 
@@ -191,39 +211,51 @@ func (d *ServiceDeployer) applyDeployments(ctx context.Context, deployDir, proje
 		if _, err := os.Stat(serviceFilePath); os.IsNotExist(err) {
 			return fmt.Errorf("指定的服务文件不存在: %s", serviceFilePath)
 		}
-		common.AppLogger.Info(fmt.Sprintf("风控项目 - 应用服务文件: %s", serviceFile))
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("风控项目 - 应用服务文件: %s", serviceFile))
+		}
 		cmd = exec.CommandContext(ctx, "kubectl", "apply", "-f", serviceFile)
 	} else {
 		// 非风控项目或无category，应用所有文件
-		common.AppLogger.Info("非风控项目或无分类 - 应用所有YAML文件")
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployService", "INFO", "非风控项目或无分类 - 应用所有YAML文件")
+		}
 		cmd = exec.CommandContext(ctx, "kubectl", "apply", "-f", ".")
 	}
 
 	cmd.Dir = deployDir // 设置工作目录
 
 	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if d.taskLogger != nil {
+		d.taskLogger.WriteCommand("deployService", cmd.String(), output, err)
+	}
+
 	if err != nil {
 		// 检查是否是上下文取消导致的错误
 		if ctx.Err() == context.Canceled {
 			return fmt.Errorf("kubectl apply被取消")
 		}
-		return fmt.Errorf("kubectl apply执行失败: %v, 输出: %s", err, string(output))
+		return fmt.Errorf("kubectl apply执行失败: %v", err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("kubectl apply执行成功，输出: %s", string(output)))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployService", "INFO", "kubectl apply执行成功")
+	}
 	return nil
 }
 
-// DeployServices 部署服务列表（包装函数）
+// DeployServices 部署服务列表（包装函数，无日志记录）
 func DeployServices(ctx context.Context, deployDir, project, newTag string) error {
-	// 使用空的taskID，因为这是包装函数
-	deployer := NewServiceDeployer("")
+	// 使用空的taskID和nil logger，因为这是包装函数
+	deployer := NewServiceDeployer("", nil)
 	return deployer.DeployServices(ctx, deployDir, project, newTag)
 }
 
-// DeployServicesWithCategory 部署服务列表（支持category的包装函数）
+// DeployServicesWithCategory 部署服务列表（支持category的包装函数，无日志记录）
 func DeployServicesWithCategory(ctx context.Context, deployDir, project, newTag, category string) error {
-	// 使用空的taskID，因为这是包装函数
-	deployer := NewServiceDeployer("")
+	// 使用空的taskID和nil logger，因为这是包装函数
+	deployer := NewServiceDeployer("", nil)
 	return deployer.DeployServicesWithCategory(ctx, deployDir, project, newTag, category)
 }

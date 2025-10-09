@@ -24,7 +24,7 @@ func DecryptAndDecompress(data string) ([]byte, error) {
 		AppLogger.Error(fmt.Sprintf("Base64解码失败: %v", err))
 		return nil, fmt.Errorf("base64解码失败: %v", err)
 	}
-	AppLogger.Info(fmt.Sprintf("Base64解码后长度: %d", len(encryptedData)))
+	// AppLogger.Info(fmt.Sprintf("Base64解码后长度: %d", len(encryptedData)))
 
 	// 2. AES-GCM解密
 	if len(encryptedData) < 12 {
@@ -33,7 +33,7 @@ func DecryptAndDecompress(data string) ([]byte, error) {
 	}
 	nonce := encryptedData[:12]
 	ciphertext := encryptedData[12:]
-	AppLogger.Info(fmt.Sprintf("Nonce长度: %d, 密文长度: %d", len(nonce), len(ciphertext)))
+	// AppLogger.Info(fmt.Sprintf("Nonce长度: %d, 密文长度: %d", len(nonce), len(ciphertext)))
 
 	block, err := aes.NewCipher(key)
 	if err != nil {
@@ -52,7 +52,7 @@ func DecryptAndDecompress(data string) ([]byte, error) {
 		AppLogger.Error(fmt.Sprintf("AES-GCM解密失败: %v", err))
 		return nil, fmt.Errorf("AES-GCM解密失败: %v", err)
 	}
-	AppLogger.Info(fmt.Sprintf("解密后的压缩数据长度: %d", len(compressedData)))
+	// AppLogger.Info(fmt.Sprintf("解密后的压缩数据长度: %d", len(compressedData)))
 
 	// 3. gzip解压缩
 	reader := bytes.NewReader(compressedData)
@@ -74,7 +74,7 @@ func DecryptAndDecompress(data string) ([]byte, error) {
 		return nil, fmt.Errorf("读取解压数据失败: %v", err)
 	}
 
-	AppLogger.Info(fmt.Sprintf("解压后的数据长度: %d", len(result)))
+	// AppLogger.Info(fmt.Sprintf("解压后的数据长度: %d", len(result)))
 	return result, nil
 }
 

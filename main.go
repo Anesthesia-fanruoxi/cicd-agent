@@ -17,6 +17,9 @@ func main() {
 	// 初始化日志
 	common.InitLogger()
 
+	// 启动日志清理定时任务（保留7天）
+	common.StartLogCleanupRoutine(7)
+
 	// 初始化IP白名单
 	common.InitWhitelist()
 

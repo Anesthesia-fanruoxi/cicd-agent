@@ -34,6 +34,11 @@ type CancelRequest struct {
 	ID string `json:"id" binding:"required"`
 }
 
+// EncryptedRequest 加密请求结构
+type EncryptedRequest struct {
+	Data string `json:"data" binding:"required"`
+}
+
 // Response 统一响应结构
 type Response struct {
 	Code int         `json:"code"`

@@ -12,7 +12,7 @@ import (
 
 // getNamespace 统一的namespace获取方法
 // mode: "now" - 当前运行的namespace（从.current文件读取）, "next" - 下一个要部署的namespace
-func getNamespace(project string, mode string) string {
+func getNamespace(project string, mode string, taskLogger *common.TaskLogger, stepName string) string {
 	singleNamespace := fmt.Sprintf("%s-service", project)
 
 	// 检查是否为双副本部署模式
@@ -25,7 +25,9 @@ func getNamespace(project string, mode string) string {
 		// 获取当前运行的namespace（使用统一的版本获取方法）
 		version, err := common.GetVersion(project)
 		if err != nil {
-			common.AppLogger.Error(fmt.Sprintf("获取版本信息失败: %v", err))
+			if taskLogger != nil {
+				taskLogger.WriteStep(stepName, "ERROR", fmt.Sprintf("获取版本信息失败: %v", err))
+			}
 			// 获取失败，默认返回v1
 			namespace := fmt.Sprintf("%s-service-v1", project)
 			return namespace
@@ -33,12 +35,14 @@ func getNamespace(project string, mode string) string {
 
 		// 根据版本信息构建namespace
 		namespace := fmt.Sprintf("%s-service-%s", project, version)
-		common.AppLogger.Info(fmt.Sprintf("当前运行namespace: %s", namespace))
+		if taskLogger != nil {
+			taskLogger.WriteStep(stepName, "INFO", fmt.Sprintf("当前运行namespace: %s", namespace))
+		}
 		return namespace
 
 	case "next":
 		// 获取下一个要部署的namespace（蓝绿切换逻辑）
-		nowNamespace := getNamespace(project, "now")
+		nowNamespace := getNamespace(project, "now", taskLogger, stepName)
 		var nextNamespace string
 		if strings.Contains(nowNamespace, "-v1") {
 			nextNamespace = fmt.Sprintf("%s-service-v2", project)
@@ -48,22 +52,28 @@ func getNamespace(project string, mode string) string {
 			// 单版本模式或首次部署，默认使用v1
 			nextNamespace = fmt.Sprintf("%s-service-v1", project)
 		}
-		common.AppLogger.Info(fmt.Sprintf("下一个部署namespace: %s", nextNamespace))
+		if taskLogger != nil {
+			taskLogger.WriteStep(stepName, "INFO", fmt.Sprintf("下一个部署namespace: %s", nextNamespace))
+		}
 		return nextNamespace
 
 	default:
-		common.AppLogger.Warning(fmt.Sprintf("未知的namespace模式: %s，使用默认", mode))
+		if taskLogger != nil {
+			taskLogger.WriteStep(stepName, "WARNING", fmt.Sprintf("未知的namespace模式: %s，使用默认", mode))
+		}
 		return singleNamespace
 	}
 }
 
 // getDeploymentPath 统一的部署路径获取方法
-// mode: "now" - 当前运行版本的部署路径, "next" - 下一个要部署版本的部署路径
-func getDeploymentPath(project string, mode string) string {
+// mode: "now" - 当前运行版本的部署路径, "next" - 下一个要部署版本的部缲路径
+func getDeploymentPath(project string, mode string, taskLogger *common.TaskLogger, stepName string) string {
 	// 获取项目基础目录
 	baseDir, exists := config.AppConfig.GetProjectPath(project)
 	if !exists {
-		common.AppLogger.Error(fmt.Sprintf("项目 %s 的部署目录未配置", project))
+		if taskLogger != nil {
+			taskLogger.WriteStep(stepName, "ERROR", fmt.Sprintf("项目 %s 的部署目录未配置", project))
+		}
 		return fmt.Sprintf("/data/project/%s/deployment", project) // 默认路径
 	}
 
@@ -77,17 +87,21 @@ func getDeploymentPath(project string, mode string) string {
 		// 获取当前运行版本的部署路径
 		version, err := common.GetVersion(project)
 		if err != nil {
-			common.AppLogger.Error(fmt.Sprintf("获取版本信息失败: %v", err))
+			if taskLogger != nil {
+				taskLogger.WriteStep(stepName, "ERROR", fmt.Sprintf("获取版本信息失败: %v", err))
+			}
 			// 获取失败，默认返回v1路径
 			return fmt.Sprintf("%s/deployment-v1", baseDir)
 		}
 		path := fmt.Sprintf("%s/deployment-%s", baseDir, version)
-		common.AppLogger.Info(fmt.Sprintf("当前运行部署路径: %s", path))
+		if taskLogger != nil {
+			taskLogger.WriteStep(stepName, "INFO", fmt.Sprintf("当前运行部署路径: %s", path))
+		}
 		return path
 
 	case "next":
 		// 获取下一个要部署版本的部署路径（蓝绿切换逻辑）
-		nowPath := getDeploymentPath(project, "now")
+		nowPath := getDeploymentPath(project, "now", taskLogger, stepName)
 		var nextPath string
 		if strings.Contains(nowPath, "-v1") {
 			nextPath = fmt.Sprintf("%s/deployment-v2", baseDir)
@@ -97,11 +111,15 @@ func getDeploymentPath(project string, mode string) string {
 			// 单版本模式或首次部署，默认使用v1
 			nextPath = fmt.Sprintf("%s/deployment-v1", baseDir)
 		}
-		common.AppLogger.Info(fmt.Sprintf("下一个部署路径: %s", nextPath))
+		if taskLogger != nil {
+			taskLogger.WriteStep(stepName, "INFO", fmt.Sprintf("下一个部署路径: %s", nextPath))
+		}
 		return nextPath
 
 	default:
-		common.AppLogger.Warning(fmt.Sprintf("未知的路径模式: %s，使用默认", mode))
+		if taskLogger != nil {
+			taskLogger.WriteStep(stepName, "WARNING", fmt.Sprintf("未知的路径模式: %s，使用默认", mode))
+		}
 		return fmt.Sprintf("%s/deployment", baseDir)
 	}
 }
@@ -114,8 +132,8 @@ func namespaceExists(namespace string) bool {
 }
 
 // getOnlineImages 获取在线镜像列表
-func getOnlineImages(project, tag string) ([]string, error) {
-	services, err := getServices(project)
+func getOnlineImages(project, tag string, taskLogger *common.TaskLogger, stepName string) ([]string, error) {
+	services, err := getServices(project, taskLogger, stepName)
 	if err != nil {
 		return nil, err
 	}
@@ -131,8 +149,8 @@ func getOnlineImages(project, tag string) ([]string, error) {
 }
 
 // getLocalImages 获取本地镜像列表
-func getLocalImages(project, tag string) ([]string, error) {
-	services, err := getServices(project)
+func getLocalImages(project, tag string, taskLogger *common.TaskLogger, stepName string) ([]string, error) {
+	services, err := getServices(project, taskLogger, stepName)
 	if err != nil {
 		return nil, err
 	}
@@ -148,13 +166,13 @@ func getLocalImages(project, tag string) ([]string, error) {
 }
 
 // getAllImages 获取所有镜像列表（在线+本地）
-func getAllImages(project, tag string) ([]string, error) {
-	onlineImages, err := getOnlineImages(project, tag)
+func getAllImages(project, tag string, taskLogger *common.TaskLogger, stepName string) ([]string, error) {
+	onlineImages, err := getOnlineImages(project, tag, taskLogger, stepName)
 	if err != nil {
 		return nil, err
 	}
 
-	localImages, err := getLocalImages(project, tag)
+	localImages, err := getLocalImages(project, tag, taskLogger, stepName)
 	if err != nil {
 		return nil, err
 	}
@@ -168,14 +186,16 @@ func getAllImages(project, tag string) ([]string, error) {
 }
 
 // getServiceList 获取服务列表
-func getServiceList(project string) ([]string, error) {
+func getServiceList(project string, taskLogger *common.TaskLogger, stepName string) ([]string, error) {
 	// 获取下一个版本的部署目录（统一处理单副本和双副本）
 	deployDir, err := common.GetDeploymentPath(project)
 	if err != nil {
 		return nil, fmt.Errorf("获取部署目录失败: %v", err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("使用部署目录: %s", deployDir))
+	if taskLogger != nil {
+		taskLogger.WriteStep(stepName, "INFO", fmt.Sprintf("使用部署目录: %s", deployDir))
+	}
 
 	// 扫描部署目录获取服务列表
 	entries, err := os.ReadDir(deployDir)
@@ -205,13 +225,15 @@ func getServiceList(project string) ([]string, error) {
 		return nil, fmt.Errorf("在部署目录 %s 中未找到任何服务", deployDir)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("扫描到服务列表: %v", services))
+	if taskLogger != nil {
+		taskLogger.WriteStep(stepName, "INFO", fmt.Sprintf("扫描到服务列表: %v", services))
+	}
 	return services, nil
 }
 
 // getServices 获取服务列表（从部署目录读取）
-func getServices(project string) ([]string, error) {
-	return getServiceList(project)
+func getServices(project string, taskLogger *common.TaskLogger, stepName string) ([]string, error) {
+	return getServiceList(project, taskLogger, stepName)
 }
 
 // getNginxConfDir 获取nginx配置目录

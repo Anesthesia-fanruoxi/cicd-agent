@@ -30,7 +30,7 @@ func HandleUpdate(c *gin.Context) {
 	// 尝试手动解析JSON来调试
 	var rawData map[string]interface{}
 	if err := json.Unmarshal(body, &rawData); err == nil {
-		common.AppLogger.Info("手动解析的JSON数据:", fmt.Sprintf("%+v", rawData))
+		//common.AppLogger.Info("手动解析的JSON数据:", fmt.Sprintf("%+v", rawData))
 	}
 
 	var req UpdateRequest
@@ -41,7 +41,7 @@ func HandleUpdate(c *gin.Context) {
 		return
 	}
 
-	common.AppLogger.Info("收到更新请求:", fmt.Sprintf("项目=%s, 类型=%s, 分类=%s", req.Project, req.Type, req.Category))
+	//common.AppLogger.Info("收到更新请求:", fmt.Sprintf("项目=%s, 类型=%s, 分类=%s", req.Project, req.Type, req.Category))
 
 	// 所有请求都进行远程调用
 	if err := callRemoteAPI(req); err != nil {
@@ -56,7 +56,7 @@ func HandleUpdate(c *gin.Context) {
 func HandleCallback(c *gin.Context) {
 	// 记录原始回调数据
 	body, _ := c.GetRawData()
-	common.AppLogger.Info("收到回调请求，原始数据:", string(body))
+	// common.AppLogger.Info("收到回调请求，原始数据:", string(body))
 
 	// 重新设置请求体
 	c.Request.Body = http.NoBody
@@ -64,9 +64,10 @@ func HandleCallback(c *gin.Context) {
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
-	var req CallbackRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		common.AppLogger.Error("回调参数绑定失败:", err)
+	// 先解析加密请求结构
+	var encryptedReq EncryptedRequest
+	if err := c.ShouldBindJSON(&encryptedReq); err != nil {
+		common.AppLogger.Error("加密请求参数绑定失败:", err)
 		c.JSON(http.StatusBadRequest, Response{
 			Code: 400,
 			Msg:  fmt.Sprintf("请求参数错误: %v", err),
@@ -74,7 +75,31 @@ func HandleCallback(c *gin.Context) {
 		return
 	}
 
-	common.AppLogger.Info("解析后的回调参数:", fmt.Sprintf("%+v", req))
+	// 解密数据
+	decryptedData, err := common.DecryptAndDecompress(encryptedReq.Data)
+	if err != nil {
+		common.AppLogger.Error("解密回调数据失败:", err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code: 400,
+			Msg:  fmt.Sprintf("解密数据失败: %v", err),
+		})
+		return
+	}
+
+	// common.AppLogger.Info("解密后的数据:", string(decryptedData))
+
+	// 解析解密后的回调请求
+	var req CallbackRequest
+	if err := json.Unmarshal(decryptedData, &req); err != nil {
+		common.AppLogger.Error("解析解密数据失败:", err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code: 400,
+			Msg:  fmt.Sprintf("解析数据失败: %v", err),
+		})
+		return
+	}
+
+	// common.AppLogger.Info("解析后的回调参数:", fmt.Sprintf("%+v", req))
 
 	// 只处理成功状态的回调
 	if req.Status != "success" {
@@ -182,9 +207,36 @@ func HandleCallback(c *gin.Context) {
 
 // HandleCancel 取消正在执行的任务
 func HandleCancel(c *gin.Context) {
+	// 先解析加密请求结构
+	var encryptedReq EncryptedRequest
+	if err := c.ShouldBindJSON(&encryptedReq); err != nil {
+		common.AppLogger.Error("加密取消请求参数绑定失败:", err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code: 400,
+			Msg:  fmt.Sprintf("请求参数错误: %v", err),
+		})
+		return
+	}
+
+	// 解密数据
+	decryptedData, err := common.DecryptAndDecompress(encryptedReq.Data)
+	if err != nil {
+		common.AppLogger.Error("解密取消请求数据失败:", err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code: 400,
+			Msg:  fmt.Sprintf("解密数据失败: %v", err),
+		})
+		return
+	}
+
+	// 解析解密后的取消请求
 	var req CancelRequest
-	if err := c.ShouldBindJSON(&req); err != nil {
-		c.JSON(http.StatusBadRequest, Response{Code: 400, Msg: "请求参数错误: " + err.Error()})
+	if err := json.Unmarshal(decryptedData, &req); err != nil {
+		common.AppLogger.Error("解析解密取消数据失败:", err)
+		c.JSON(http.StatusBadRequest, Response{
+			Code: 400,
+			Msg:  fmt.Sprintf("解析数据失败: %v", err),
+		})
 		return
 	}
 
@@ -202,7 +254,7 @@ func callRemoteAPI(req UpdateRequest) error {
 	// 构建回调URL
 	callbackURL := config.AppConfig.GetCallbackURL()
 
-	common.AppLogger.Info("构建的回调URL:", callbackURL)
+	//common.AppLogger.Info("构建的回调URL:", callbackURL)
 
 	// 构建远程调用请求
 	remoteReq := RemoteCallRequest{
@@ -217,7 +269,7 @@ func callRemoteAPI(req UpdateRequest) error {
 		return fmt.Errorf("序列化请求失败: %v", err)
 	}
 
-	common.AppLogger.Info("发送到远程服务的URL:", config.AppConfig.Remote.UpdateURL)
+	//common.AppLogger.Info("发送到远程服务的URL:", config.AppConfig.Remote.UpdateURL)
 	common.AppLogger.Info("发送到远程服务的数据:", string(jsonData))
 
 	// 发送HTTP请求
@@ -238,8 +290,8 @@ func callRemoteAPI(req UpdateRequest) error {
 
 	// 读取响应内容
 	respBody, _ := io.ReadAll(resp.Body)
-	common.AppLogger.Info("远程服务响应状态:", resp.StatusCode)
-	common.AppLogger.Info("远程服务响应内容:", string(respBody))
+	//common.AppLogger.Info("远程服务响应状态:", resp.StatusCode)
+	//common.AppLogger.Info("远程服务响应内容:", string(respBody))
 
 	if resp.StatusCode != http.StatusOK {
 		return fmt.Errorf("远程服务返回错误状态: %d, 响应内容: %s", resp.StatusCode, string(respBody))

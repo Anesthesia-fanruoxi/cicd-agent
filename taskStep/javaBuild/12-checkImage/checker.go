@@ -13,12 +13,16 @@ import (
 
 // ImageChecker 镜像检查器
 type ImageChecker struct {
-	taskID string
+	taskID     string
+	taskLogger *common.TaskLogger
 }
 
 // NewImageChecker 创建镜像检查器
-func NewImageChecker(taskID string) *ImageChecker {
-	return &ImageChecker{taskID: taskID}
+func NewImageChecker(taskID string, taskLogger *common.TaskLogger) *ImageChecker {
+	return &ImageChecker{
+		taskID:     taskID,
+		taskLogger: taskLogger,
+	}
 }
 
 // CheckImageExistsInHarbor 检查镜像在Harbor中是否存在
@@ -29,7 +33,9 @@ func (c *ImageChecker) CheckImageExistsInHarbor(ctx context.Context, projectName
 	url := fmt.Sprintf("https://%s/api/v2.0/projects/%s/repositories/%s/artifacts/%s/tags",
 		harborConfig.Offline, projectName, imageName, tag)
 
-	common.AppLogger.Info(fmt.Sprintf("检查Harbor镜像: %s", url))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkImage", "INFO", fmt.Sprintf("检查Harbor镜像: %s/%s:%s", projectName, imageName, tag))
+	}
 
 	// 创建HTTP请求
 	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
@@ -54,8 +60,9 @@ func (c *ImageChecker) CheckImageExistsInHarbor(ctx context.Context, projectName
 
 	// 检查响应状态码
 	exists := resp.StatusCode == 200
-	common.AppLogger.Info(fmt.Sprintf("镜像 %s/%s:%s 在Harbor中存在状态: %v (状态码: %d)",
-		projectName, imageName, tag, exists, resp.StatusCode))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkImage", "INFO", fmt.Sprintf("镜像 %s/%s:%s 存在状态: %v", projectName, imageName, tag, exists))
+	}
 
 	return exists, nil
 }
@@ -90,7 +97,9 @@ func (c *ImageChecker) CheckImagesExistInHarbor(ctx context.Context, images []st
 		maxConcurrency = len(imageNames)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("检查Harbor镜像: 总数=%d, 并发数=%d", len(imageNames), maxConcurrency))
+	if c.taskLogger != nil {
+		c.taskLogger.WriteStep("checkImage", "INFO", fmt.Sprintf("检查Harbor镜像: 总数=%d, 并发数=%d", len(imageNames), maxConcurrency))
+	}
 
 	semaphore := make(chan struct{}, maxConcurrency)
 	var wg sync.WaitGroup
@@ -120,7 +129,9 @@ func (c *ImageChecker) CheckImagesExistInHarbor(ctx context.Context, images []st
 
 			mu.Lock()
 			if err != nil {
-				common.AppLogger.Error(fmt.Sprintf("检查镜像 %s 失败: %v", imgName, err))
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkImage", "ERROR", fmt.Sprintf("检查镜像 %s 失败: %v", imgName, err))
+				}
 				result[imgName] = false
 				failedImages = append(failedImages, imgName)
 			} else {
@@ -149,15 +160,19 @@ func (c *ImageChecker) CheckImagesExistInHarbor(ctx context.Context, images []st
 }
 
 // CheckImages 检查镜像列表（在Harbor中检查）
-func CheckImages(ctx context.Context, images []string, projectName string, tag string, taskID string) error {
+func CheckImages(ctx context.Context, images []string, projectName string, tag string, taskID string, taskLogger *common.TaskLogger) error {
 	if len(images) == 0 {
-		common.AppLogger.Info("没有需要检查的镜像")
+		if taskLogger != nil {
+			taskLogger.WriteStep("checkImage", "INFO", "没有需要检查的镜像")
+		}
 		return nil
 	}
 
-	checker := NewImageChecker(taskID)
+	checker := NewImageChecker(taskID, taskLogger)
 
-	common.AppLogger.Info(fmt.Sprintf("开始检查Harbor镜像，项目: %s, 标签: %s", projectName, tag))
+	if taskLogger != nil {
+		taskLogger.WriteStep("checkImage", "INFO", fmt.Sprintf("开始检查Harbor镜像，项目: %s, 标签: %s", projectName, tag))
+	}
 
 	// 批量检查镜像
 	result, failedImages, err := checker.CheckImagesExistInHarbor(ctx, images, projectName, tag)
@@ -169,19 +184,28 @@ func CheckImages(ctx context.Context, images []string, projectName string, tag s
 	successCount := 0
 	for imageName, exists := range result {
 		if exists {
-			common.AppLogger.Info(fmt.Sprintf("✓ 镜像 %s 在Harbor中存在", imageName))
+			if taskLogger != nil {
+				taskLogger.WriteStep("checkImage", "INFO", fmt.Sprintf("✓ 镜像 %s 在Harbor中存在", imageName))
+			}
 			successCount++
 		} else {
-			common.AppLogger.Warning(fmt.Sprintf("✗ 镜像 %s 在Harbor中不存在", imageName))
+			if taskLogger != nil {
+				taskLogger.WriteStep("checkImage", "WARNING", fmt.Sprintf("✗ 镜像 %s 在Harbor中不存在", imageName))
+			}
 		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("镜像检查完成: 总数=%d, 成功=%d, 失败=%d",
-		len(images), successCount, len(failedImages)))
+	if taskLogger != nil {
+		taskLogger.WriteStep("checkImage", "INFO", fmt.Sprintf("镜像检查完成: 总数=%d, 成功=%d, 失败=%d", len(images), successCount, len(failedImages)))
+	}
 
 	// 如果有失败的镜像，返回错误
 	if len(failedImages) > 0 {
-		return fmt.Errorf("以下镜像在Harbor中不存在: %v", failedImages)
+		errMsg := fmt.Sprintf("以下镜像在Harbor中不存在: %v", failedImages)
+		if taskLogger != nil {
+			taskLogger.WriteStep("checkImage", "ERROR", errMsg)
+		}
+		return fmt.Errorf(errMsg)
 	}
 
 	return nil

@@ -59,7 +59,7 @@ func SendStepNotification(taskID string, step int, stepType, stepName, status, m
 	// 获取通知URL
 	notifyURL := getNotifyURL()
 	if notifyURL == "" {
-		AppLogger.Info("通知功能未启用或URL未配置，跳过通知发送")
+		//AppLogger.Info("通知功能未启用或URL未配置，跳过通知发送")
 		return nil
 	}
 
@@ -98,7 +98,7 @@ func SendStepNotification(taskID string, step int, stepType, stepName, status, m
 	notificationData.EstimatedEnd = calculateEstimatedEnd(project, stepKey)
 
 	// 调试日志
-	AppLogger.Info(fmt.Sprintf("步骤 %s(%s) - 上次耗时: %.2f秒, 预计结束: %s", stepName, stepKey, notificationData.LastDuration, notificationData.EstimatedEnd))
+	//AppLogger.Info(fmt.Sprintf("步骤 %s(%s) - 上次耗时: %.2f秒, 预计结束: %s", stepName, stepKey, notificationData.LastDuration, notificationData.EstimatedEnd))
 
 	// 设置步骤开始时间 - 兼容新旧格式
 	var startTime time.Time
@@ -113,7 +113,7 @@ func SendStepNotification(taskID string, step int, stepType, stepName, status, m
 		oldStepKey := fmt.Sprintf("%s_%d_%s", taskID, step, stepType)
 		if startTime, exists = stepStartTimes[oldStepKey]; exists {
 			keyToDelete = oldStepKey
-			AppLogger.Info(fmt.Sprintf("使用旧格式键值找到开始时间: %s", oldStepKey))
+			//AppLogger.Info(fmt.Sprintf("使用旧格式键值找到开始时间: %s", oldStepKey))
 		}
 	}
 
@@ -141,8 +141,8 @@ func SendStepNotification(taskID string, step int, stepType, stepName, status, m
 		return fmt.Errorf("序列化通知数据失败: %v", err)
 	}
 
-	AppLogger.Info(fmt.Sprintf("发送%s通知到: %s", stepType, notifyURL))
-	AppLogger.Info(fmt.Sprintf("发送的JSON数据: %s", string(jsonData)))
+	//AppLogger.Info(fmt.Sprintf("发送%s通知到: %s", stepType, notifyURL))
+	//AppLogger.Info(fmt.Sprintf("发送的JSON数据: %s", string(jsonData)))
 
 	// 加密和压缩数据
 	encryptedData, err := CompressAndEncrypt(jsonData)
@@ -163,7 +163,7 @@ func SendStepNotification(taskID string, step int, stepType, stepName, status, m
 	}
 
 	// 发送HTTP请求
-	AppLogger.Info(fmt.Sprintf("正在发送HTTP请求到: %s", notifyURL))
+	// AppLogger.Info(fmt.Sprintf("正在发送HTTP请求到: %s", notifyURL))
 	resp, err := http.Post(notifyURL, "application/json", bytes.NewReader(requestJson))
 	if err != nil {
 		AppLogger.Error(fmt.Sprintf("发送通知请求失败: %v", err))
@@ -178,8 +178,8 @@ func SendStepNotification(taskID string, step int, stepType, stepName, status, m
 		return fmt.Errorf("读取响应失败: %v", err)
 	}
 
-	AppLogger.Info(fmt.Sprintf("收到响应状态码: %d", resp.StatusCode))
-	AppLogger.Info(fmt.Sprintf("响应内容: %s", string(respBody)))
+	//AppLogger.Info(fmt.Sprintf("收到响应状态码: %d", resp.StatusCode))
+	// AppLogger.Info(fmt.Sprintf("响应内容: %s", string(respBody)))
 
 	// 检查响应状态
 	if resp.StatusCode != 200 {
@@ -187,18 +187,18 @@ func SendStepNotification(taskID string, step int, stepType, stepName, status, m
 		return fmt.Errorf("远程接口返回错误: %s", string(respBody))
 	}
 
-	AppLogger.Info("通知发送成功")
+	// AppLogger.Info("通知发送成功")
 
 	// 通知发送成功后，如果是完成状态，才更新版本文件中的步骤耗时
 	if status == "success" || status == "failed" || status == "cancel" {
 		if notificationData.Duration > 0 {
-			AppLogger.Info(fmt.Sprintf("开始更新步骤耗时到文件: %s = %.2f秒", stepKey, notificationData.Duration))
+			//AppLogger.Info(fmt.Sprintf("开始更新步骤耗时到文件: %s = %.2f秒", stepKey, notificationData.Duration))
 			updateStepDurationInFile(project, stepKey, notificationData.Duration)
 		} else {
 			AppLogger.Warning(fmt.Sprintf("步骤 %s 的耗时为0，跳过文件更新", stepKey))
 		}
 	} else {
-		AppLogger.Info(fmt.Sprintf("步骤 %s 状态为 %s，不需要更新文件", stepKey, status))
+		//AppLogger.Info(fmt.Sprintf("步骤 %s 状态为 %s，不需要更新文件", stepKey, status))
 	}
 
 	return nil
@@ -243,18 +243,18 @@ func calculateEstimatedEnd(project, currentStepName string) string {
 
 // updateStepDurationInFile 更新版本文件中的步骤耗时（不修改版本信息）
 func updateStepDurationInFile(project, stepName string, durationSeconds float64) {
-	AppLogger.Info(fmt.Sprintf("正在更新步骤耗时: 项目=%s, 步骤=%s, 耗时=%.2f秒", project, stepName, durationSeconds))
+	//AppLogger.Info(fmt.Sprintf("正在更新步骤耗时: 项目=%s, 步骤=%s, 耗时=%.2f秒", project, stepName, durationSeconds))
 
 	// 存储为秒数，保留2位小数
 	roundedDuration := math.Round(durationSeconds*100) / 100
-	AppLogger.Info(fmt.Sprintf("设置步骤耗时: %s = %.2f秒", stepName, roundedDuration))
+	//AppLogger.Info(fmt.Sprintf("设置步骤耗时: %s = %.2f秒", stepName, roundedDuration))
 
 	// 使用统一的步骤耗时更新方法
-	AppLogger.Info(fmt.Sprintf("开始保存步骤耗时到磁盘: 项目=%s", project))
+	// AppLogger.Info(fmt.Sprintf("开始保存步骤耗时到磁盘: 项目=%s", project))
 	if err := UpdateStepDuration(project, stepName, roundedDuration); err != nil {
 		AppLogger.Error(fmt.Sprintf("保存步骤耗时失败: %v", err))
 	} else {
-		AppLogger.Info(fmt.Sprintf("成功保存步骤耗时! 项目 %s 步骤 %s: %.2f秒", project, stepName, roundedDuration))
+		//AppLogger.Info(fmt.Sprintf("成功保存步骤耗时! 项目 %s 步骤 %s: %.2f秒", project, stepName, roundedDuration))
 	}
 }
 
@@ -304,7 +304,7 @@ func SendTaskNotification(taskID, name, startedAt, status string, opsURL, proURL
 		return fmt.Errorf("序列化任务通知数据失败: %v", err)
 	}
 
-	AppLogger.Info(fmt.Sprintf("发送的JSON数据: %s", string(jsonData)))
+	//AppLogger.Info(fmt.Sprintf("发送的JSON数据: %s", string(jsonData)))
 
 	// 加密和压缩数据
 	encryptedData, err := CompressAndEncrypt(jsonData)
@@ -325,7 +325,7 @@ func SendTaskNotification(taskID, name, startedAt, status string, opsURL, proURL
 	}
 
 	// 发送HTTP请求
-	AppLogger.Info(fmt.Sprintf("正在发送任务通知HTTP请求到: %s", notifyURL))
+	//AppLogger.Info(fmt.Sprintf("正在发送任务通知HTTP请求到: %s", notifyURL))
 	resp, err := http.Post(notifyURL, "application/json", bytes.NewReader(requestJson))
 	if err != nil {
 		AppLogger.Error(fmt.Sprintf("发送任务通知请求失败: %v", err))
@@ -349,6 +349,6 @@ func SendTaskNotification(taskID, name, startedAt, status string, opsURL, proURL
 		return fmt.Errorf("远程接口返回错误: %s", string(respBody))
 	}
 
-	AppLogger.Info("任务通知发送成功")
+	//AppLogger.Info("任务通知发送成功")
 	return nil
 }

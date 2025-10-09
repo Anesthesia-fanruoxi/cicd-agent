@@ -14,25 +14,31 @@ import (
 
 // DownProductStep 下载产物步骤
 type DownProductStep struct {
-	project  string
-	tag      string
-	category string
-	ctx      context.Context
+	project    string
+	tag        string
+	category   string
+	ctx        context.Context
+	taskLogger *common.TaskLogger
 }
 
 // NewDownProductStep 创建下载产物步骤
-func NewDownProductStep(project, tag, category string, ctx context.Context) *DownProductStep {
+func NewDownProductStep(project, tag, category string, ctx context.Context, taskLogger *common.TaskLogger) *DownProductStep {
 	return &DownProductStep{
-		project:  project,
-		tag:      tag,
-		category: category,
-		ctx:      ctx,
+		project:    project,
+		tag:        tag,
+		category:   category,
+		ctx:        ctx,
+		taskLogger: taskLogger,
 	}
 }
 
 // Execute 执行下载产物
 func (d *DownProductStep) Execute() error {
-	common.AppLogger.Info(fmt.Sprintf("开始执行下载产物步骤: 项目=%s, 标签=%s, 分类=%s", d.project, d.tag, d.category))
+	logMsg := fmt.Sprintf("开始执行下载产物步骤: 项目=%s, 标签=%s, 分类=%s", d.project, d.tag, d.category)
+	common.AppLogger.Info(logMsg)
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("downProduct", "INFO", logMsg)
+	}
 
 	// 构建产物名称: name-tag.zip
 	var productName string

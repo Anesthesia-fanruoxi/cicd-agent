@@ -18,10 +18,11 @@ type TrafficSwitcher struct {
 	serviceName  string
 	version      string
 	nginxConfDir string // nginx配置目录，默认 /etc/nginx/conf.d
+	taskLogger   *common.TaskLogger
 }
 
 // NewTrafficSwitcher 创建流量切换处理器
-func NewTrafficSwitcher(namespace, serviceName, version, nginxConfDir string) *TrafficSwitcher {
+func NewTrafficSwitcher(namespace, serviceName, version, nginxConfDir string, taskLogger *common.TaskLogger) *TrafficSwitcher {
 	if nginxConfDir == "" {
 		nginxConfDir = "/etc/nginx/conf.d"
 	}
@@ -30,12 +31,15 @@ func NewTrafficSwitcher(namespace, serviceName, version, nginxConfDir string) *T
 		serviceName:  serviceName,
 		version:      version,
 		nginxConfDir: nginxConfDir,
+		taskLogger:   taskLogger,
 	}
 }
 
 // Execute 执行流量切换
 func (ts *TrafficSwitcher) Execute(ctx context.Context, step taskStep.Step) error {
-	common.AppLogger.Info(fmt.Sprintf("开始执行流量切换，目标版本: %s", ts.version))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("开始执行流量切换，目标版本: %s", ts.version))
+	}
 
 	// 1. 获取当前版本的Gateway LoadBalancer地址
 	gatewayIP, err := ts.getGatewayLoadBalancerIP(ctx)
@@ -43,7 +47,9 @@ func (ts *TrafficSwitcher) Execute(ctx context.Context, step taskStep.Step) erro
 		return fmt.Errorf("获取Gateway LoadBalancer地址失败: %v", err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("获取到Gateway地址: %s:8080", gatewayIP))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("获取到Gateway地址: %s:8080", gatewayIP))
+	}
 
 	// 2. 修改所有Nginx配置文件
 	if err := ts.updateAllNginxConfigs(gatewayIP); err != nil {
@@ -60,7 +66,9 @@ func (ts *TrafficSwitcher) Execute(ctx context.Context, step taskStep.Step) erro
 		return fmt.Errorf("远程重启Nginx失败: %v", err)
 	}
 
-	common.AppLogger.Info("Nginx配置验证完成")
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", "流量切换完成")
+	}
 	return nil
 }
 
@@ -70,7 +78,9 @@ func (ts *TrafficSwitcher) getGatewayLoadBalancerIP(ctx context.Context) (string
 	serviceNamespace := ts.namespace
 	gatewayServiceName := fmt.Sprintf("%s-gateway", ts.serviceName)
 
-	common.AppLogger.Info(fmt.Sprintf("查找服务: %s/%s", serviceNamespace, gatewayServiceName))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("查找服务: %s/%s", serviceNamespace, gatewayServiceName))
+	}
 
 	// 执行kubectl命令获取LoadBalancer的EXTERNAL-IP
 	cmdArgs := []string{
@@ -81,8 +91,14 @@ func (ts *TrafficSwitcher) getGatewayLoadBalancerIP(ctx context.Context) (string
 
 	cmd := exec.CommandContext(ctx, "kubectl", cmdArgs...)
 	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteCommand("trafficSwitching", cmd.String(), output, err)
+	}
+
 	if err != nil {
-		return "", fmt.Errorf("执行kubectl命令失败: %v, 输出: %s", err, string(output))
+		return "", fmt.Errorf("执行kubectl命令失败: %v", err)
 	}
 
 	ip := strings.TrimSpace(string(output))
@@ -95,7 +111,9 @@ func (ts *TrafficSwitcher) getGatewayLoadBalancerIP(ctx context.Context) (string
 
 // updateAllNginxConfigs 更新/etc/nginx/conf.d目录下所有配置文件
 func (ts *TrafficSwitcher) updateAllNginxConfigs(gatewayIP string) error {
-	common.AppLogger.Info(fmt.Sprintf("开始更新目录下所有Nginx配置文件: %s", ts.nginxConfDir))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("开始更新目录下所有Nginx配置文件: %s", ts.nginxConfDir))
+	}
 
 	// 获取目录下所有.conf文件
 	confFiles, err := ts.getAllConfFiles()
@@ -107,19 +125,25 @@ func (ts *TrafficSwitcher) updateAllNginxConfigs(gatewayIP string) error {
 		return fmt.Errorf("目录 %s 下未找到.conf配置文件", ts.nginxConfDir)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("找到%d个配置文件，开始批量更新", len(confFiles)))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("找到%d个配置文件，开始批量更新", len(confFiles)))
+	}
 
 	// 逐个处理配置文件
 	updatedCount := 0
 	for _, confFile := range confFiles {
 		if err := ts.updateSingleConfigFile(confFile, gatewayIP); err != nil {
-			common.AppLogger.Warning(fmt.Sprintf("更新配置文件 %s 失败: %v", confFile, err))
+			if ts.taskLogger != nil {
+				ts.taskLogger.WriteStep("trafficSwitching", "WARNING", fmt.Sprintf("更新配置文件 %s 失败: %v", confFile, err))
+			}
 			continue
 		}
 		updatedCount++
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("成功更新%d个配置文件，后端地址: %s:8080", updatedCount, gatewayIP))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("成功更新%d个配置文件，后端地址: %s:8080", updatedCount, gatewayIP))
+	}
 	return nil
 }
 
@@ -156,7 +180,9 @@ func (ts *TrafficSwitcher) updateSingleConfigFile(filePath, gatewayIP string) er
 	// 替换IP地址和端口
 	newContent, changed := ts.replaceIPAndPort(originalContent, gatewayIP)
 	if !changed {
-		common.AppLogger.Info(fmt.Sprintf("配置文件 %s 无需更新", filepath.Base(filePath)))
+		if ts.taskLogger != nil {
+			ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("配置文件 %s 无需更新", filepath.Base(filePath)))
+		}
 		return nil
 	}
 
@@ -166,7 +192,9 @@ func (ts *TrafficSwitcher) updateSingleConfigFile(filePath, gatewayIP string) er
 		return fmt.Errorf("写入文件失败: %v", err)
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("已更新配置文件: %s", filepath.Base(filePath)))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("已更新配置文件: %s", filepath.Base(filePath)))
+	}
 	return nil
 }
 
@@ -206,7 +234,9 @@ func (ts *TrafficSwitcher) replaceIPAndPort(content, newIP string) (string, bool
 
 // verifyNginxConfig 验证nginx配置是否正确应用
 func (ts *TrafficSwitcher) verifyNginxConfig(expectedIP string) error {
-	common.AppLogger.Info("开始验证nginx配置是否正确应用")
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", "开始验证nginx配置是否正确应用")
+	}
 
 	// 获取所有配置文件
 	confFiles, err := ts.getAllConfFiles()
@@ -222,7 +252,9 @@ func (ts *TrafficSwitcher) verifyNginxConfig(expectedIP string) error {
 	for _, confFile := range confFiles {
 		content, err := os.ReadFile(confFile)
 		if err != nil {
-			common.AppLogger.Warning(fmt.Sprintf("读取配置文件 %s 失败: %v", confFile, err))
+			if ts.taskLogger != nil {
+				ts.taskLogger.WriteStep("trafficSwitching", "WARNING", fmt.Sprintf("读取配置文件 %s 失败: %v", confFile, err))
+			}
 			continue
 		}
 
@@ -231,6 +263,13 @@ func (ts *TrafficSwitcher) verifyNginxConfig(expectedIP string) error {
 		// 检查是否包含期望的IP地址
 		if !ts.containsExpectedIP(string(content), expectedIP) {
 			inconsistentFiles = append(inconsistentFiles, filepath.Base(confFile))
+			if ts.taskLogger != nil {
+				ts.taskLogger.WriteStep("trafficSwitching", "WARNING", fmt.Sprintf("配置文件 %s 检查失败：未找到期望的后端地址 %s", filepath.Base(confFile), expectedTarget))
+			}
+		} else {
+			if ts.taskLogger != nil {
+				ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("配置文件 %s 检查通过：后端地址正确为 %s", filepath.Base(confFile), expectedTarget))
+			}
 		}
 	}
 
@@ -239,7 +278,9 @@ func (ts *TrafficSwitcher) verifyNginxConfig(expectedIP string) error {
 			len(inconsistentFiles), expectedTarget, strings.Join(inconsistentFiles, ", "))
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("配置验证成功，共检查%d个文件，后端地址均为: %s", totalChecked, expectedTarget))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("配置验证成功，共检查%d个文件，后端地址均为: %s", totalChecked, expectedTarget))
+	}
 	return nil
 }
 
@@ -278,7 +319,9 @@ func (ts *TrafficSwitcher) reloadNginxRemotely(ctx context.Context) error {
 		// "192.168.7.4",
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("启动异步SSH重启%d个Nginx服务器", len(nginxServers)))
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("启动异步SSH重启%d个Nginx服务器", len(nginxServers)))
+	}
 
 	// 异步执行所有服务器的nginx重启，不阻塞主线程
 	go func() {
@@ -294,7 +337,9 @@ func (ts *TrafficSwitcher) reloadNginxRemotely(ctx context.Context) error {
 		// 并发执行所有服务器的nginx重启
 		for _, serverIP := range nginxServers {
 			go func(ip string) {
-				common.AppLogger.Info(fmt.Sprintf("正在重启nginx服务器: %s@%s", sshUser, ip))
+				if ts.taskLogger != nil {
+					ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("正在重启nginx服务器: %s@%s", sshUser, ip))
+				}
 
 				// 构建SSH命令，优化配置避免警告信息
 				sshCmd := exec.CommandContext(ctx, "ssh",
@@ -312,7 +357,9 @@ func (ts *TrafficSwitcher) reloadNginxRemotely(ctx context.Context) error {
 					errorMsg := fmt.Sprintf("SSH执行失败: %v, 输出: %s", err, string(output))
 					resultChan <- reloadResult{serverIP: ip, success: false, error: errorMsg}
 				} else {
-					common.AppLogger.Info(fmt.Sprintf("服务器%s nginx重启成功", ip))
+					if ts.taskLogger != nil {
+						ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("服务器%s nginx重启成功", ip))
+					}
 					resultChan <- reloadResult{serverIP: ip, success: true, error: ""}
 				}
 			}(serverIP)
@@ -329,24 +376,34 @@ func (ts *TrafficSwitcher) reloadNginxRemotely(ctx context.Context) error {
 			} else {
 				errorMsg := fmt.Sprintf("服务器%s重启失败: %s", result.serverIP, result.error)
 				errors = append(errors, errorMsg)
-				common.AppLogger.Error(errorMsg)
+				if ts.taskLogger != nil {
+					ts.taskLogger.WriteStep("trafficSwitching", "ERROR", errorMsg)
+				}
 			}
 		}
 
 		// 异步报告最终结果
 		if len(errors) > 0 {
 			if successCount == 0 {
-				common.AppLogger.Error(fmt.Sprintf("所有nginx服务器重启失败: %s", strings.Join(errors, "; ")))
+				if ts.taskLogger != nil {
+					ts.taskLogger.WriteStep("trafficSwitching", "ERROR", fmt.Sprintf("所有nginx服务器重启失败: %s", strings.Join(errors, "; ")))
+				}
 			} else {
-				common.AppLogger.Warning(fmt.Sprintf("部分nginx服务器重启失败(%d/%d成功): %s",
-					successCount, len(nginxServers), strings.Join(errors, "; ")))
+				if ts.taskLogger != nil {
+					ts.taskLogger.WriteStep("trafficSwitching", "WARNING", fmt.Sprintf("部分nginx服务器重启失败(%d/%d成功): %s",
+						successCount, len(nginxServers), strings.Join(errors, "; ")))
+				}
 			}
 		} else {
-			common.AppLogger.Info(fmt.Sprintf("所有Nginx服务器重启成功(%d/%d)", successCount, len(nginxServers)))
+			if ts.taskLogger != nil {
+				ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("所有Nginx服务器重启成功(%d/%d)", successCount, len(nginxServers)))
+			}
 		}
 	}()
 
 	// 立即返回，不等待SSH执行完成
-	common.AppLogger.Info("Nginx重启任务已启动，正在后台执行...")
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", "Nginx重启任务已启动，正在后台执行...")
+	}
 	return nil
 }

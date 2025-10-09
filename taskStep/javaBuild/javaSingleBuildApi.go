@@ -24,6 +24,7 @@ type SingleVersionProcessor struct {
 	opsURL        string
 	proURL        string
 	stepDurations map[string]interface{}
+	taskLogger    *common.TaskLogger // 任务日志器
 }
 
 // NewSingleVersionProcessor 创建单版本部署处理器
@@ -39,6 +40,7 @@ func NewSingleVersionProcessor(project, category, tag, description, taskID strin
 		opsURL:        opsURL,
 		proURL:        proURL,
 		stepDurations: stepDurations,
+		taskLogger:    common.NewTaskLogger(taskID), // 创建任务日志器
 	}
 }
 
@@ -46,32 +48,59 @@ func NewSingleVersionProcessor(project, category, tag, description, taskID strin
 func (r *SingleVersionProcessor) ProcessSingleVersionDeployment() error {
 	common.AppLogger.Info("开始处理单版本部署请求", fmt.Sprintf("项目=%s, 标签=%s, 分类=%s", r.project, r.tag, r.category))
 
+	// 确保日志文件关闭
+	defer func() {
+		if r.taskLogger != nil {
+			r.taskLogger.Close()
+		}
+	}()
+
+	// 写入任务开始日志到文件
+	if r.taskLogger != nil {
+		r.taskLogger.WriteConsole("INFO", fmt.Sprintf("开始处理单版本部署请求: 项目=%s, 标签=%s, 分类=%s", r.project, r.tag, r.category))
+	}
+
 	// 步骤9：拉取在线镜像
 	if err := r.step9PullOnline(); err != nil {
+		if r.ctx.Err() == context.Canceled {
+			return fmt.Errorf("步骤9拉取在线镜像被取消: %v", err)
+		}
 		r.sendFailureNotifications()
 		return fmt.Errorf("步骤9拉取在线镜像失败: %v", err)
 	}
 
 	// 步骤10：标记镜像
 	if err := r.step10TagImages(); err != nil {
+		if r.ctx.Err() == context.Canceled {
+			return fmt.Errorf("步骤10标记镜像被取消: %v", err)
+		}
 		r.sendFailureNotifications()
 		return fmt.Errorf("步骤10标记镜像失败: %v", err)
 	}
 
 	// 步骤11：推送本地镜像
 	if err := r.step11PushLocal(); err != nil {
+		if r.ctx.Err() == context.Canceled {
+			return fmt.Errorf("步骤11推送本地镜像被取消: %v", err)
+		}
 		r.sendFailureNotifications()
 		return fmt.Errorf("步骤11推送本地镜像失败: %v", err)
 	}
 
 	// 步骤12：检查镜像
 	if err := r.step12CheckImage(); err != nil {
+		if r.ctx.Err() == context.Canceled {
+			return fmt.Errorf("步骤12检查镜像被取消: %v", err)
+		}
 		r.sendFailureNotifications()
 		return fmt.Errorf("步骤12检查镜像失败: %v", err)
 	}
 
 	// 步骤13：应用服务部署
 	if err := r.step13DeployService(); err != nil {
+		if r.ctx.Err() == context.Canceled {
+			return fmt.Errorf("步骤13应用服务部署被取消: %v", err)
+		}
 		r.sendFailureNotifications()
 		return fmt.Errorf("步骤13应用服务部署失败: %v", err)
 	}
@@ -101,11 +130,24 @@ func (r *SingleVersionProcessor) step9PullOnline() error {
 
 	common.AppLogger.Info("执行步骤9：拉取在线镜像")
 
+	// 写入文件日志
+	if r.taskLogger != nil {
+		r.taskLogger.WriteStep("pullOnline", "INFO", "开始拉取在线镜像")
+	}
+
 	// 获取需要拉取的镜像列表
-	images, err := getOnlineImages(r.project, r.tag)
+	images, err := getOnlineImages(r.project, r.tag, r.taskLogger, "pullOnline")
 	if err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("pullOnline", "ERROR", fmt.Sprintf("获取镜像列表失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 9, "pullOnline", stepName, "failed", fmt.Sprintf("获取镜像列表失败: %v", err), r.project, r.tag)
 		return err
+	}
+
+	// 写入详细的镜像列表到文件
+	if r.taskLogger != nil {
+		r.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("镜像列表: %v", images))
 	}
 
 	// 取消检查
@@ -118,20 +160,31 @@ func (r *SingleVersionProcessor) step9PullOnline() error {
 	}
 
 	// 使用9-pullOnline模块拉取镜像（可取消）
-	puller := pullOnline.NewImagePuller(r.taskID)
+	puller := pullOnline.NewImagePuller(r.taskID, r.taskLogger)
 	if err := puller.PullImages(r.ctx, images); err != nil {
 		// 检查是否是取消操作
 		if r.ctx.Err() == context.Canceled {
+			if r.taskLogger != nil {
+				r.taskLogger.WriteStep("pullOnline", "WARNING", "拉取镜像被取消")
+			}
 			common.SendStepNotification(r.taskID, 9, "pullOnline", stepName, "cancel", fmt.Sprintf("拉取镜像被取消: %v", err), r.project, r.tag)
+			r.sendCancelNotifications()
+			return r.ctx.Err()
 		} else {
+			if r.taskLogger != nil {
+				r.taskLogger.WriteStep("pullOnline", "ERROR", fmt.Sprintf("拉取镜像失败: %v", err))
+			}
 			common.SendStepNotification(r.taskID, 9, "pullOnline", stepName, "failed", fmt.Sprintf("拉取镜像失败: %v", err), r.project, r.tag)
+			return err
 		}
-		return err
 	}
 
 	// 发送步骤完成通知
 	common.SendStepNotification(r.taskID, 9, "pullOnline", stepName, "success", "拉取在线镜像完成", r.project, r.tag)
 	common.AppLogger.Info("步骤9完成：拉取在线镜像")
+	if r.taskLogger != nil {
+		r.taskLogger.WriteStep("pullOnline", "INFO", "拉取在线镜像完成")
+	}
 	return nil
 }
 
@@ -145,14 +198,20 @@ func (r *SingleVersionProcessor) step10TagImages() error {
 	common.AppLogger.Info("执行步骤10：标记镜像")
 
 	// 获取在线镜像和本地镜像列表
-	onlineImages, err := getOnlineImages(r.project, r.tag)
+	onlineImages, err := getOnlineImages(r.project, r.tag, r.taskLogger, "tagImages")
 	if err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("tagImages", "ERROR", fmt.Sprintf("获取在线镜像列表失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 10, "tagImages", stepName, "failed", fmt.Sprintf("获取在线镜像列表失败: %v", err), r.project, r.tag)
 		return err
 	}
 
-	localImages, err := getLocalImages(r.project, r.tag)
+	localImages, err := getLocalImages(r.project, r.tag, r.taskLogger, "tagImages")
 	if err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("tagImages", "ERROR", fmt.Sprintf("获取本地镜像列表失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 10, "tagImages", stepName, "failed", fmt.Sprintf("获取本地镜像列表失败: %v", err), r.project, r.tag)
 		return err
 	}
@@ -167,14 +226,19 @@ func (r *SingleVersionProcessor) step10TagImages() error {
 	}
 
 	// 使用10-tagImage模块标记镜像（可取消）
-	if err := tagImage.TagImages(r.ctx, onlineImages, localImages, r.taskID); err != nil {
+	if err := tagImage.TagImages(r.ctx, onlineImages, localImages, r.taskID, r.taskLogger); err != nil {
 		// 检查是否是取消操作
 		if r.ctx.Err() == context.Canceled {
 			common.SendStepNotification(r.taskID, 10, "tagImages", stepName, "cancel", fmt.Sprintf("标记镜像被取消: %v", err), r.project, r.tag)
+			r.sendCancelNotifications()
+			return r.ctx.Err()
 		} else {
+			if r.taskLogger != nil {
+				r.taskLogger.WriteStep("tagImages", "ERROR", fmt.Sprintf("标记镜像失败: %v", err))
+			}
 			common.SendStepNotification(r.taskID, 10, "tagImages", stepName, "failed", fmt.Sprintf("标记镜像失败: %v", err), r.project, r.tag)
+			return err
 		}
-		return err
 	}
 
 	// 发送步骤完成通知
@@ -193,8 +257,11 @@ func (r *SingleVersionProcessor) step11PushLocal() error {
 	common.AppLogger.Info("执行步骤11：推送本地镜像")
 
 	// 获取需要推送的镜像列表
-	images, err := getLocalImages(r.project, r.tag)
+	images, err := getLocalImages(r.project, r.tag, r.taskLogger, "pushLocal")
 	if err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("pushLocal", "ERROR", fmt.Sprintf("获取本地镜像列表失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 11, "pushLocal", stepName, "failed", fmt.Sprintf("获取本地镜像列表失败: %v", err), r.project, r.tag)
 		return err
 	}
@@ -215,15 +282,20 @@ func (r *SingleVersionProcessor) step11PushLocal() error {
 	}
 
 	// 使用11-pushLocal模块推送镜像（可取消）
-	pusher := pushLocal.NewImagePusher(r.taskID)
+	pusher := pushLocal.NewImagePusher(r.taskID, r.taskLogger)
 	if err := pusher.PushImages(r.ctx, images); err != nil {
 		// 检查是否是取消操作
 		if r.ctx.Err() == context.Canceled {
 			common.SendStepNotification(r.taskID, 11, "pushLocal", stepName, "cancel", fmt.Sprintf("推送镜像被取消: %v", err), r.project, r.tag)
+			r.sendCancelNotifications()
+			return r.ctx.Err()
 		} else {
+			if r.taskLogger != nil {
+				r.taskLogger.WriteStep("pushLocal", "ERROR", fmt.Sprintf("推送镜像失败: %v", err))
+			}
 			common.SendStepNotification(r.taskID, 11, "pushLocal", stepName, "failed", fmt.Sprintf("推送镜像失败: %v", err), r.project, r.tag)
+			return err
 		}
-		return err
 	}
 
 	// 发送步骤完成通知
@@ -242,8 +314,11 @@ func (r *SingleVersionProcessor) step12CheckImage() error {
 	common.AppLogger.Info("执行步骤12：检查镜像")
 
 	// 获取需要检查的镜像列表（仅检查离线仓库Harbor中的镜像）
-	images, err := getLocalImages(r.project, r.tag)
+	images, err := getLocalImages(r.project, r.tag, r.taskLogger, "checkImage")
 	if err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("checkImage", "ERROR", fmt.Sprintf("获取镜像列表失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 12, "checkImage", stepName, "failed", fmt.Sprintf("获取镜像列表失败: %v", err), r.project, r.tag)
 		return err
 	}
@@ -264,7 +339,10 @@ func (r *SingleVersionProcessor) step12CheckImage() error {
 	}
 
 	// 使用12-checkImage模块检查镜像（显式传入项目与标签，可取消）
-	if err := checkImage.CheckImages(r.ctx, images, r.project, r.tag, r.taskID); err != nil {
+	if err := checkImage.CheckImages(r.ctx, images, r.project, r.tag, r.taskID, r.taskLogger); err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("checkImage", "ERROR", fmt.Sprintf("检查镜像失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 12, "checkImage", stepName, "failed", fmt.Sprintf("检查镜像失败: %v", err), r.project, r.tag)
 		return err
 	}
@@ -287,11 +365,16 @@ func (r *SingleVersionProcessor) step13DeployService() error {
 	// 获取单版本部署目录
 	deployDir, err := common.GetDeploymentPath(r.project)
 	if err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("deployService", "ERROR", fmt.Sprintf("获取部署目录失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 13, "deployService", stepName, "failed", fmt.Sprintf("获取部署目录失败: %v", err), r.project, r.tag)
 		return err
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("使用部署目录: %s", deployDir))
+	if r.taskLogger != nil {
+		r.taskLogger.WriteStep("deployService", "INFO", fmt.Sprintf("使用部署目录: %s", deployDir))
+	}
 
 	// 取消检查
 	select {
@@ -303,8 +386,11 @@ func (r *SingleVersionProcessor) step13DeployService() error {
 	}
 
 	// 使用13-deployService模块部署服务（可取消）
-	deployer := deployService.NewServiceDeployer(r.taskID)
+	deployer := deployService.NewServiceDeployer(r.taskID, r.taskLogger)
 	if err := deployer.DeployServicesWithCategory(r.ctx, deployDir, r.project, r.tag, r.category); err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("deployService", "ERROR", fmt.Sprintf("应用服务部署失败: %v", err))
+		}
 		common.SendStepNotification(r.taskID, 13, "deployService", stepName, "failed", fmt.Sprintf("应用服务部署失败: %v", err), r.project, r.tag)
 		return err
 	}

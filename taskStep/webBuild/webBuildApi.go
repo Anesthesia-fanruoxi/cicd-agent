@@ -5,7 +5,7 @@ import (
 	"fmt"
 	"os"
 	"time"
-	
+
 	"cicd-agent/common"
 	"cicd-agent/taskStep/webBuild/10-deployNew"
 	"cicd-agent/taskStep/webBuild/7-downProduct"
@@ -50,6 +50,7 @@ type RemoteProcessor struct {
 	opsURL        string
 	proURL        string
 	stepDurations map[string]interface{}
+	taskLogger    *common.TaskLogger // 任务日志器
 }
 
 // NewRemoteProcessor 创建web构建remote处理器
@@ -65,6 +66,7 @@ func NewRemoteProcessor(project, category, tag, description, taskID string, ctx 
 		opsURL:        opsURL,
 		proURL:        proURL,
 		stepDurations: stepDurations,
+		taskLogger:    common.NewTaskLogger(taskID), // 创建任务日志器
 	}
 }
 
@@ -72,9 +74,21 @@ func NewRemoteProcessor(project, category, tag, description, taskID string, ctx 
 func (r *RemoteProcessor) ProcessRemoteRequest() error {
 	common.AppLogger.Info("收到web构建回调", fmt.Sprintf("项目=%s, 分类=%s, 标签=%s, 任务ID=%s", r.project, r.category, r.tag, r.taskID))
 
+	// 确保日志文件关闭
+	defer func() {
+		if r.taskLogger != nil {
+			r.taskLogger.Close()
+		}
+	}()
+
+	// 写入任务开始日志到文件
+	if r.taskLogger != nil {
+		r.taskLogger.WriteConsole("INFO", fmt.Sprintf("收到web构建回调: 项目=%s, 分类=%s, 标签=%s, 任务ID=%s", r.project, r.category, r.tag, r.taskID))
+	}
+
 	// 1. 下载产物
 	common.SendStepNotification(r.taskID, 7, "downProduct", "下载产物", "start", "", r.project, r.tag)
-	downProductStep := downProduct.NewDownProductStep(r.project, r.tag, r.category, r.ctx)
+	downProductStep := downProduct.NewDownProductStep(r.project, r.tag, r.category, r.ctx, r.taskLogger)
 	if err := downProductStep.Execute(); err != nil {
 		common.AppLogger.Error("下载产物失败:", err)
 		// 发送步骤失败通知
@@ -94,7 +108,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 
 	// 2. 解压产物
 	common.SendStepNotification(r.taskID, 8, "extractProduct", "解压产物", "start", "", r.project, r.tag)
-	extractStep := extractProduct.NewExtractProductStep(r.project, r.tag, r.category, r.ctx, downProductStep.GetLocalFilePath())
+	extractStep := extractProduct.NewExtractProductStep(r.project, r.tag, r.category, r.ctx, downProductStep.GetLocalFilePath(), r.taskLogger)
 	if err := extractStep.Execute(); err != nil {
 		common.AppLogger.Error("解压产物失败:", err)
 		// 发送步骤失败通知
@@ -114,7 +128,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 
 	// 3. 备份当前版本
 	common.SendStepNotification(r.taskID, 9, "backupCurrent", "备份当前版本", "start", "", r.project, r.tag)
-	backupStep := backupCurrent.NewBackupCurrentStep(r.project, r.tag, r.category, r.ctx)
+	backupStep := backupCurrent.NewBackupCurrentStep(r.project, r.tag, r.category, r.ctx, r.taskLogger)
 	if err := backupStep.Execute(); err != nil {
 		common.AppLogger.Error("备份当前版本失败:", err)
 		// 发送步骤失败通知
@@ -134,7 +148,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 
 	// 4. 部署新版本
 	common.SendStepNotification(r.taskID, 10, "deployNew", "部署新版本", "start", "", r.project, r.tag)
-	deployStep := deployNew.NewDeployNewStep(r.project, r.tag, r.category, r.ctx, extractStep.GetDistPath())
+	deployStep := deployNew.NewDeployNewStep(r.project, r.tag, r.category, r.ctx, extractStep.GetDistPath(), r.taskLogger)
 	if err := deployStep.Execute(); err != nil {
 		common.AppLogger.Error("部署新版本失败:", err)
 		// 发送步骤失败通知
@@ -164,7 +178,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 	if err := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "complete", r.opsURL, r.proURL, r.stepDurations); err != nil {
 		common.AppLogger.Error("发送任务完成通知失败:", err)
 	}
-	
+
 	// 发送飞书完成通知
 	if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "single", r.category, r.description); err != nil {
 		common.AppLogger.Error("发送飞书卡片通知失败:", err)

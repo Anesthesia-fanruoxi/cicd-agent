@@ -13,27 +13,33 @@ import (
 
 // DeployNewStep 部署新版本步骤
 type DeployNewStep struct {
-	project  string
-	tag      string
-	category string
-	ctx      context.Context
-	distPath string
+	project    string
+	tag        string
+	category   string
+	ctx        context.Context
+	distPath   string
+	taskLogger *common.TaskLogger
 }
 
 // NewDeployNewStep 创建部署新版本步骤
-func NewDeployNewStep(project, tag, category string, ctx context.Context, distPath string) *DeployNewStep {
+func NewDeployNewStep(project, tag, category string, ctx context.Context, distPath string, taskLogger *common.TaskLogger) *DeployNewStep {
 	return &DeployNewStep{
-		project:  project,
-		tag:      tag,
-		category: category,
-		ctx:      ctx,
-		distPath: distPath,
+		project:    project,
+		tag:        tag,
+		category:   category,
+		ctx:        ctx,
+		distPath:   distPath,
+		taskLogger: taskLogger,
 	}
 }
 
 // Execute 执行部署新版本
 func (d *DeployNewStep) Execute() error {
-	common.AppLogger.Info(fmt.Sprintf("开始执行部署新版本步骤: 项目=%s, 标签=%s, 分类=%s", d.project, d.tag, d.category))
+	logMsg := fmt.Sprintf("开始执行部署新版本步骤: 项目=%s, 标签=%s, 分类=%s", d.project, d.tag, d.category)
+	common.AppLogger.Info(logMsg)
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployNew", "INFO", logMsg)
+	}
 
 	// 获取目标web路径
 	webPath := d.getWebPath()
