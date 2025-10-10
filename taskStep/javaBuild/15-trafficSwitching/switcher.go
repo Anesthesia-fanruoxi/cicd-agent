@@ -2,6 +2,7 @@ package trafficSwitching
 
 import (
 	"cicd-agent/common"
+	"cicd-agent/config"
 	"cicd-agent/taskStep"
 	"context"
 	"fmt"
@@ -41,6 +42,40 @@ func (ts *TrafficSwitcher) Execute(ctx context.Context, step taskStep.Step) erro
 		ts.taskLogger.WriteStep("trafficSwitching", "INFO", fmt.Sprintf("开始执行流量切换，目标版本: %s", ts.version))
 	}
 
+	// 判断是否启用流量代理
+	if config.AppConfig.GetTrafficProxyEnable() {
+		// 使用流量代理方式切换
+		if ts.taskLogger != nil {
+			ts.taskLogger.WriteStep("trafficSwitching", "INFO", "检测到已启用流量代理，使用代理方式切换流量")
+		}
+		return ts.executeProxySwitch(ctx)
+	}
+
+	// 使用 Nginx Upstream 方式切换
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", "使用Nginx Upstream方式切换流量")
+	}
+	return ts.executeNginxSwitch(ctx)
+}
+
+// executeProxySwitch 通过流量代理切换
+func (ts *TrafficSwitcher) executeProxySwitch(ctx context.Context) error {
+	// 创建流量代理切换器
+	proxySwitcher := NewProxySwitcher(ts.version, ts.taskLogger)
+
+	// 执行切换
+	if err := proxySwitcher.Execute(ctx); err != nil {
+		return err
+	}
+
+	if ts.taskLogger != nil {
+		ts.taskLogger.WriteStep("trafficSwitching", "INFO", "流量切换完成")
+	}
+	return nil
+}
+
+// executeNginxSwitch 通过修改 Nginx Upstream 切换
+func (ts *TrafficSwitcher) executeNginxSwitch(ctx context.Context) error {
 	// 1. 获取当前版本的Gateway LoadBalancer地址
 	gatewayIP, err := ts.getGatewayLoadBalancerIP(ctx)
 	if err != nil {

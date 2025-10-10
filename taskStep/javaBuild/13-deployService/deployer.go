@@ -12,6 +12,7 @@ import (
 	"sync"
 
 	"cicd-agent/common"
+	"cicd-agent/config"
 )
 
 // ServiceDeployer 服务部署器
@@ -146,8 +147,10 @@ func (d *ServiceDeployer) updateYamlFile(filePath, project, newTag string) error
 	scanner := bufio.NewScanner(file)
 
 	// 构建镜像匹配正则表达式
-	// 匹配格式: image: hub.hzbxhd.com/project/service:tag
-	imagePattern := regexp.MustCompile(`^(\s*image:\s*)(hub\.hzbxhd\.com/` + regexp.QuoteMeta(project) + `/[^:]+):(.+)$`)
+	// 从配置中获取离线Harbor地址并转义特殊字符（如点号）
+	escapedHarbor := regexp.QuoteMeta(config.AppConfig.Harbor.Offline)
+	// 匹配格式: image: testhub.hzbxhd.com/project/service:tag
+	imagePattern := regexp.MustCompile(`^(\s*image:\s*)(` + escapedHarbor + `/` + regexp.QuoteMeta(project) + `/[^:]+):(.+)$`)
 
 	for scanner.Scan() {
 		line := scanner.Text()

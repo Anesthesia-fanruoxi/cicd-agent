@@ -90,7 +90,9 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 	common.SendStepNotification(r.taskID, 7, "downProduct", "下载产物", "start", "", r.project, r.tag)
 	downProductStep := downProduct.NewDownProductStep(r.project, r.tag, r.category, r.ctx, r.taskLogger)
 	if err := downProductStep.Execute(); err != nil {
-		common.AppLogger.Error("下载产物失败:", err)
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("downProduct", "ERROR", fmt.Sprintf("下载产物失败: %v", err))
+		}
 		// 发送步骤失败通知
 		common.SendStepNotification(r.taskID, 7, "downProduct", "下载产物", "failed", err.Error(), r.project, r.tag)
 		// 发送任务失败通知
@@ -110,7 +112,9 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 	common.SendStepNotification(r.taskID, 8, "extractProduct", "解压产物", "start", "", r.project, r.tag)
 	extractStep := extractProduct.NewExtractProductStep(r.project, r.tag, r.category, r.ctx, downProductStep.GetLocalFilePath(), r.taskLogger)
 	if err := extractStep.Execute(); err != nil {
-		common.AppLogger.Error("解压产物失败:", err)
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("解压产物失败: %v", err))
+		}
 		// 发送步骤失败通知
 		common.SendStepNotification(r.taskID, 8, "extractProduct", "解压产物", "failed", err.Error(), r.project, r.tag)
 		// 发送任务失败通知
@@ -130,7 +134,9 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 	common.SendStepNotification(r.taskID, 9, "backupCurrent", "备份当前版本", "start", "", r.project, r.tag)
 	backupStep := backupCurrent.NewBackupCurrentStep(r.project, r.tag, r.category, r.ctx, r.taskLogger)
 	if err := backupStep.Execute(); err != nil {
-		common.AppLogger.Error("备份当前版本失败:", err)
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("backupCurrent", "ERROR", fmt.Sprintf("备份当前版本失败: %v", err))
+		}
 		// 发送步骤失败通知
 		common.SendStepNotification(r.taskID, 9, "backupCurrent", "备份当前版本", "failed", err.Error(), r.project, r.tag)
 		// 发送任务失败通知
@@ -150,12 +156,20 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 	common.SendStepNotification(r.taskID, 10, "deployNew", "部署新版本", "start", "", r.project, r.tag)
 	deployStep := deployNew.NewDeployNewStep(r.project, r.tag, r.category, r.ctx, extractStep.GetDistPath(), r.taskLogger)
 	if err := deployStep.Execute(); err != nil {
-		common.AppLogger.Error("部署新版本失败:", err)
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("部署新版本失败: %v", err))
+		}
 		// 发送步骤失败通知
 		common.SendStepNotification(r.taskID, 10, "deployNew", "部署新版本", "failed", err.Error(), r.project, r.tag)
 		// 部署失败时尝试回滚
 		if rollbackErr := r.rollbackDeployment(backupStep.GetBackupPath(), deployStep.GetWebPath()); rollbackErr != nil {
-			common.AppLogger.Error("回滚部署失败:", rollbackErr)
+			if r.taskLogger != nil {
+				r.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("回滚部署失败: %v", rollbackErr))
+			}
+		} else {
+			if r.taskLogger != nil {
+				r.taskLogger.WriteStep("deployNew", "INFO", "部署失败，已成功回滚到备份版本")
+			}
 		}
 		// 发送任务失败通知
 		endTime := time.Now().Format("2006-01-02 15:04:05")
@@ -190,24 +204,36 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 
 // rollbackDeployment 回滚部署
 func (r *RemoteProcessor) rollbackDeployment(backupPath, webPath string) error {
-	common.AppLogger.Info(fmt.Sprintf("开始回滚部署: %s -> %s", backupPath, webPath))
+	if r.taskLogger != nil {
+		r.taskLogger.WriteStep("rollback", "INFO", fmt.Sprintf("开始回滚部署: %s -> %s", backupPath, webPath))
+	}
 
 	// 检查备份是否存在
 	if _, err := os.Stat(backupPath); os.IsNotExist(err) {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("rollback", "ERROR", fmt.Sprintf("备份目录不存在，无法回滚: %s", backupPath))
+		}
 		return fmt.Errorf("备份目录不存在，无法回滚: %s", backupPath)
 	}
 
 	// 删除失败的部署
 	if err := os.RemoveAll(webPath); err != nil {
-		common.AppLogger.Warning(fmt.Sprintf("删除失败部署目录失败: %v", err))
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("rollback", "ERROR", fmt.Sprintf("删除失败部署目录失败: %v", err))
+		}
 	}
 
 	// 恢复备份
 	if err := os.Rename(backupPath, webPath); err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("rollback", "ERROR", fmt.Sprintf("恢复备份失败: %v", err))
+		}
 		return fmt.Errorf("恢复备份失败: %v", err)
 	}
 
-	common.AppLogger.Info("部署回滚成功")
+	if r.taskLogger != nil {
+		r.taskLogger.WriteStep("rollback", "INFO", "部署回滚成功")
+	}
 	return nil
 }
 

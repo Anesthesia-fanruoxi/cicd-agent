@@ -27,11 +27,9 @@ func NewImageChecker(taskID string, taskLogger *common.TaskLogger) *ImageChecker
 
 // CheckImageExistsInHarbor 检查镜像在Harbor中是否存在
 func (c *ImageChecker) CheckImageExistsInHarbor(ctx context.Context, projectName, imageName, tag string) (bool, error) {
-	harborConfig := config.AppConfig.Harbor
-
 	// 构建Harbor API URL
 	url := fmt.Sprintf("https://%s/api/v2.0/projects/%s/repositories/%s/artifacts/%s/tags",
-		harborConfig.Offline, projectName, imageName, tag)
+		config.AppConfig.Harbor.Offline, projectName, imageName, tag)
 
 	if c.taskLogger != nil {
 		c.taskLogger.WriteStep("checkImage", "INFO", fmt.Sprintf("检查Harbor镜像: %s/%s:%s", projectName, imageName, tag))
@@ -44,7 +42,7 @@ func (c *ImageChecker) CheckImageExistsInHarbor(ctx context.Context, projectName
 	}
 
 	// 设置基本认证
-	req.SetBasicAuth(harborConfig.OfflineUser, harborConfig.OfflinePassword)
+	req.SetBasicAuth(config.AppConfig.Harbor.OfflineUser, config.AppConfig.Harbor.OfflinePassword)
 
 	// 创建HTTP客户端
 	client := &http.Client{

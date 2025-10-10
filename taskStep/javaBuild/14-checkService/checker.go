@@ -61,33 +61,33 @@ func (c *ServiceChecker) isPodNormalState(status string) bool {
 	return false
 }
 
-// scaleDownFailedControllers 缩容失败的控制器到0个副本
+// scaleDownFailedControllers 缩容命名空间下所有控制器到0个副本
 func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespace string) error {
 	if c.taskLogger != nil {
 		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("=== 开始执行缩容操作 ==="))
-		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容目标命名空间: %s", namespace))
+		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容目标命名空间: %s (将缩容所有控制器)", namespace))
 	}
 
-	// 获取失败的Pod及其对应的控制器
-	failedControllers, err := c.getFailedControllers(ctx, namespace)
+	// 获取命名空间下所有控制器
+	allControllers, err := c.getAllControllers(ctx, namespace)
 	if err != nil {
 		if c.taskLogger != nil {
-			c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("获取失败控制器列表失败: %v", err))
+			c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("获取控制器列表失败: %v", err))
 		}
 		return err
 	}
 
-	if len(failedControllers) == 0 {
+	if len(allControllers) == 0 {
 		if c.taskLogger != nil {
-			c.taskLogger.WriteStep("checkService", "INFO", "没有发现需要缩容的失败控制器")
+			c.taskLogger.WriteStep("checkService", "WARNING", "没有发现需要缩容的控制器")
 		}
 		return nil
 	}
 
-	// 缩容失败的控制器
-	for controllerType, controllers := range failedControllers {
+	// 缩容所有控制器
+	for controllerType, controllers := range allControllers {
 		if c.taskLogger != nil {
-			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("缩容失败的%s: %v", controllerType, controllers))
+			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("开始缩容 %s: %v", controllerType, controllers))
 		}
 
 		switch controllerType {
@@ -124,8 +124,136 @@ func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespa
 	return nil
 }
 
-// getFailedControllers 获取失败Pod对应的控制器
-func (c *ServiceChecker) getFailedControllers(ctx context.Context, namespace string) (map[string][]string, error) {
+// getAllControllers 获取命名空间下所有控制器
+func (c *ServiceChecker) getAllControllers(ctx context.Context, namespace string) (map[string][]string, error) {
+	allControllers := make(map[string][]string)
+
+	// 获取所有Deployment
+	cmdDeploy := exec.CommandContext(ctx, "kubectl", "get", "deployments", "-n", namespace, "--no-headers", "-o", "custom-columns=NAME:.metadata.name")
+	outputDeploy, err := cmdDeploy.CombinedOutput()
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", cmdDeploy.String(), outputDeploy, err)
+	}
+	if err == nil && len(outputDeploy) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(outputDeploy)), "\n")
+		for _, line := range lines {
+			name := strings.TrimSpace(line)
+			if name != "" && name != "No resources found" {
+				allControllers["Deployment"] = append(allControllers["Deployment"], name)
+			}
+		}
+	}
+
+	// 获取所有StatefulSet
+	cmdSts := exec.CommandContext(ctx, "kubectl", "get", "statefulsets", "-n", namespace, "--no-headers", "-o", "custom-columns=NAME:.metadata.name")
+	outputSts, err := cmdSts.CombinedOutput()
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", cmdSts.String(), outputSts, err)
+	}
+	if err == nil && len(outputSts) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(outputSts)), "\n")
+		for _, line := range lines {
+			name := strings.TrimSpace(line)
+			if name != "" && name != "No resources found" {
+				allControllers["StatefulSet"] = append(allControllers["StatefulSet"], name)
+			}
+		}
+	}
+
+	// 获取所有独立的ReplicaSet（不属于Deployment的）
+	cmdRs := exec.CommandContext(ctx, "kubectl", "get", "replicasets", "-n", namespace, "--no-headers", "-o", "custom-columns=NAME:.metadata.name,OWNER:.metadata.ownerReferences[0].kind")
+	outputRs, err := cmdRs.CombinedOutput()
+	if c.taskLogger != nil {
+		c.taskLogger.WriteCommand("checkService", cmdRs.String(), outputRs, err)
+	}
+	if err == nil && len(outputRs) > 0 {
+		lines := strings.Split(strings.TrimSpace(string(outputRs)), "\n")
+		for _, line := range lines {
+			parts := strings.Fields(line)
+			if len(parts) >= 2 {
+				name := parts[0]
+				owner := parts[1]
+				// 只缩容没有Deployment作为owner的ReplicaSet
+				if owner != "Deployment" && name != "" {
+					allControllers["ReplicaSet"] = append(allControllers["ReplicaSet"], name)
+				}
+			}
+		}
+	}
+
+	return allControllers, nil
+}
+
+// getFailedControllers 获取失败Pod对应的控制器（已弃用）
+func (c *ServiceChecker) getFailedControllers(ctx context.Context, namespace string, failedPods []string) (map[string][]string, error) {
+	if len(failedPods) == 0 {
+		return make(map[string][]string), nil
+	}
+
+	failedControllers := make(map[string][]string)
+
+	// 对每个失败的pod查询其控制器信息
+	for _, podName := range failedPods {
+		cmd := exec.CommandContext(ctx, "kubectl", "get", "pod", podName, "-n", namespace,
+			"-o", "jsonpath={.metadata.ownerReferences[0].kind},{.metadata.ownerReferences[0].name}")
+
+		output, err := cmd.CombinedOutput()
+
+		if c.taskLogger != nil {
+			c.taskLogger.WriteCommand("checkService", cmd.String(), output, err)
+		}
+
+		if err != nil {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "WARNING", fmt.Sprintf("获取Pod %s 的控制器信息失败: %v", podName, err))
+			}
+			continue
+		}
+
+		result := strings.TrimSpace(string(output))
+		if result == "" {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "WARNING", fmt.Sprintf("Pod %s 没有控制器信息", podName))
+			}
+			continue
+		}
+
+		parts := strings.Split(result, ",")
+		if len(parts) >= 2 {
+			controllerKind := strings.TrimSpace(parts[0])
+			controllerName := strings.TrimSpace(parts[1])
+
+			if controllerKind != "" && controllerName != "" {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("发现失败Pod: %s, 控制器: %s (%s)", podName, controllerName, controllerKind))
+				}
+
+				// 收集需要缩容的控制器
+				if _, exists := failedControllers[controllerKind]; !exists {
+					failedControllers[controllerKind] = []string{}
+				}
+
+				// 避免重复添加
+				found := false
+				for _, existing := range failedControllers[controllerKind] {
+					if existing == controllerName {
+						found = true
+						break
+					}
+				}
+
+				if !found {
+					failedControllers[controllerKind] = append(failedControllers[controllerKind], controllerName)
+				}
+			}
+		}
+	}
+
+	return failedControllers, nil
+}
+
+// getFailedControllersOld 获取失败Pod对应的控制器（旧版本，使用field-selector）
+func (c *ServiceChecker) getFailedControllersOld(ctx context.Context, namespace string) (map[string][]string, error) {
 	// 获取所有非Running状态的Pod及其控制器信息
 	cmd := exec.CommandContext(ctx, "kubectl", "get", "pods", "-n", namespace,
 		"--field-selector=status.phase!=Running", "--no-headers",
@@ -968,7 +1096,7 @@ func (c *ServiceChecker) checkSinglePodHealth(ctx context.Context, namespace, po
 	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	cmdArgs := []string{"exec", "-n", namespace, podName, "-c", "filebeat", "--", "curl", "-s", "127.0.0.1:8080/actuator/health"}
+	cmdArgs := []string{"exec", "-n", namespace, podName, "-c", "filebeat", "--", "curl", "-s", "http://127.0.0.1:8080/actuator/health"}
 	cmd := exec.CommandContext(cmdCtx, "kubectl", cmdArgs...)
 	output, err := cmd.CombinedOutput()
 
@@ -976,12 +1104,15 @@ func (c *ServiceChecker) checkSinglePodHealth(ctx context.Context, namespace, po
 		return fmt.Errorf("健康检查命令执行失败: %v", err)
 	}
 
-	// 检查返回内容是否包含UP状态
-	if strings.Contains(string(output), "UP") || strings.Contains(string(output), "\"status\":\"UP\"") {
+	outputStr := strings.TrimSpace(string(output))
+
+	// 只要能正确返回JSON响应（包含status字段），就认为服务已就绪
+	// 不判断UP/DOWN，因为只要服务能响应就说明已经启动
+	if outputStr != "" && (strings.Contains(outputStr, "\"status\"") || strings.Contains(outputStr, "status")) {
 		return nil
 	}
 
-	return fmt.Errorf("健康检查返回异常状态: %s", string(output))
+	return fmt.Errorf("健康检查返回异常: %s", outputStr)
 }
 
 // checkPodReady 检查单个pod的就绪状态

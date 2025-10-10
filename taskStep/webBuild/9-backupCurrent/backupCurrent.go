@@ -33,7 +33,6 @@ func NewBackupCurrentStep(project, tag, category string, ctx context.Context, ta
 // Execute 执行备份当前版本
 func (b *BackupCurrentStep) Execute() error {
 	logMsg := fmt.Sprintf("开始执行备份当前版本步骤: 项目=%s, 标签=%s, 分类=%s", b.project, b.tag, b.category)
-	common.AppLogger.Info(logMsg)
 	if b.taskLogger != nil {
 		b.taskLogger.WriteStep("backupCurrent", "INFO", logMsg)
 	}
@@ -42,25 +41,35 @@ func (b *BackupCurrentStep) Execute() error {
 	webPath := b.getWebPath()
 	backupPath := b.getBackupPath()
 
-	common.AppLogger.Info(fmt.Sprintf("Web目录: %s, 备份目录: %s", webPath, backupPath))
+	if b.taskLogger != nil {
+		b.taskLogger.WriteStep("backupCurrent", "INFO", fmt.Sprintf("Web目录: %s, 备份目录: %s", webPath, backupPath))
+	}
 
 	// 删除旧的备份目录
 	if err := b.removeOldBackup(backupPath); err != nil {
-		common.AppLogger.Warning(fmt.Sprintf("删除旧备份失败: %v", err))
+		if b.taskLogger != nil {
+			b.taskLogger.WriteStep("backupCurrent", "ERROR", fmt.Sprintf("删除旧备份失败: %v", err))
+		}
 	}
 
 	// 检查web目录是否存在
 	if _, err := os.Stat(webPath); os.IsNotExist(err) {
-		common.AppLogger.Info("web目录不存在，跳过备份（可能是首次部署）")
+		if b.taskLogger != nil {
+			b.taskLogger.WriteStep("backupCurrent", "INFO", "web目录不存在，跳过备份（可能是首次部署）")
+		}
 		return nil
 	}
 
 	// 执行备份
 	if err := b.moveDirectory(webPath, backupPath); err != nil {
-		return fmt.Errorf("备份web目录失败: %v", err)
+		if b.taskLogger != nil {
+			b.taskLogger.WriteStep("backupCurrent", "ERROR", fmt.Sprintf("备份web目录失败: %v", err))
+		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("备份当前版本步骤执行完成: %s -> %s", webPath, backupPath))
+	if b.taskLogger != nil {
+		b.taskLogger.WriteStep("backupCurrent", "INFO", fmt.Sprintf("备份当前版本步骤执行完成: %s -> %s", webPath, backupPath))
+	}
 	return nil
 }
 
@@ -91,24 +100,35 @@ func (b *BackupCurrentStep) removeOldBackup(backupPath string) error {
 		return nil
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("删除旧备份目录: %s", backupPath))
+	if b.taskLogger != nil {
+		b.taskLogger.WriteStep("backupCurrent", "INFO", fmt.Sprintf("删除旧备份目录: %s", backupPath))
+	}
 	return os.RemoveAll(backupPath)
 }
 
 // moveDirectory 移动目录
 func (b *BackupCurrentStep) moveDirectory(src, dst string) error {
-	common.AppLogger.Info(fmt.Sprintf("移动目录: %s -> %s", src, dst))
+	if b.taskLogger != nil {
+		b.taskLogger.WriteStep("backupCurrent", "INFO", fmt.Sprintf("移动目录: %s -> %s", src, dst))
+	}
 
 	// 创建目标目录的父目录
 	if err := os.MkdirAll(filepath.Dir(dst), 0755); err != nil {
-		return fmt.Errorf("创建父目录失败: %v", err)
+		if b.taskLogger != nil {
+			b.taskLogger.WriteStep("backupCurrent", "ERROR", fmt.Sprintf("创建父目录失败: %v", err))
+		}
 	}
 
 	// 移动目录
 	if err := os.Rename(src, dst); err != nil {
-		return fmt.Errorf("移动目录失败: %v", err)
+		if b.taskLogger != nil {
+			b.taskLogger.WriteStep("backupCurrent", "ERROR", fmt.Sprintf("移动目录失败: %v", err))
+		}
 	}
 
+	if b.taskLogger != nil {
+		b.taskLogger.WriteStep("backupCurrent", "INFO", fmt.Sprintf("移动目录成功: %s -> %s", src, dst))
+	}
 	return nil
 }
 

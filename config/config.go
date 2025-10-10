@@ -21,6 +21,7 @@ type Config struct {
 	Projects     ProjectsConfig     `yaml:"projects"`
 	Deployment   DeploymentConfig   `yaml:"deployment"`
 	Notification NotificationConfig `yaml:"notification"`
+	TrafficProxy TrafficProxyConfig `yaml:"traffic_proxy"`
 }
 
 // ServerConfig 服务器配置
@@ -60,6 +61,7 @@ type CallbackConfig struct {
 // WebConfig Web部署配置
 type WebConfig struct {
 	DownloadURL string `yaml:"download_url"`
+	DownloadDir string `yaml:"download_dir"`
 	WebDir      string `yaml:"web_dir"`
 }
 
@@ -86,6 +88,12 @@ type NotificationConfig struct {
 	Enable         bool   `yaml:"enable"`
 	NotifyURL      string `yaml:"notify_url"`
 	EncryptionSalt string `yaml:"encryption_salt"`
+}
+
+// TrafficProxyConfig 流量代理配置
+type TrafficProxyConfig struct {
+	Enable   bool   `yaml:"enable"`
+	ProxyURL string `yaml:"proxy_url"`
 }
 
 var AppConfig *Config
@@ -219,4 +227,17 @@ func (c *Config) GetWebPath(projectName string) string {
 // GetWebDownloadURL 获取产物下载URL
 func (c *Config) GetWebDownloadURL() string {
 	return c.Web.DownloadURL
+}
+func (c *Config) GetWebDownloadDir() string {
+	return c.Web.DownloadDir
+}
+
+// GetTrafficProxyURL 获取流量代理URL
+func (c *Config) GetTrafficProxyURL() string {
+	return c.TrafficProxy.ProxyURL
+}
+
+// GetTrafficProxyEnable 获取流量代理是否开启
+func (c *Config) GetTrafficProxyEnable() bool {
+	return c.TrafficProxy.Enable
 }

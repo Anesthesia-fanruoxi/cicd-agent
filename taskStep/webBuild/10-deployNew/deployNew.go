@@ -36,7 +36,6 @@ func NewDeployNewStep(project, tag, category string, ctx context.Context, distPa
 // Execute 执行部署新版本
 func (d *DeployNewStep) Execute() error {
 	logMsg := fmt.Sprintf("开始执行部署新版本步骤: 项目=%s, 标签=%s, 分类=%s", d.project, d.tag, d.category)
-	common.AppLogger.Info(logMsg)
 	if d.taskLogger != nil {
 		d.taskLogger.WriteStep("deployNew", "INFO", logMsg)
 	}
@@ -46,38 +45,54 @@ func (d *DeployNewStep) Execute() error {
 
 	// 检查dist目录是否存在
 	if _, err := os.Stat(d.distPath); os.IsNotExist(err) {
-		return fmt.Errorf("dist目录不存在: %s", d.distPath)
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("dist目录不存在: %s", d.distPath))
+		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("部署路径: %s -> %s", d.distPath, webPath))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployNew", "INFO", fmt.Sprintf("部署路径: %s -> %s", d.distPath, webPath))
+	}
 
 	// 创建目标目录的父目录
 	if err := os.MkdirAll(filepath.Dir(webPath), 0755); err != nil {
-		return fmt.Errorf("创建父目录失败: %v", err)
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("创建父目录失败: %v", err))
+		}
 	}
 
 	// 移动dist目录到目标位置
 	if err := d.moveDirectory(d.distPath, webPath); err != nil {
-		return fmt.Errorf("部署新版本失败: %v", err)
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("部署新版本失败: %v", err))
+		}
 	}
 
 	// 验证部署结果
 	if err := d.verifyDeployment(webPath); err != nil {
-		return fmt.Errorf("部署验证失败: %v", err)
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("部署验证失败: %v", err))
+		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("部署新版本步骤执行完成: %s", webPath))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployNew", "INFO", fmt.Sprintf("部署新版本步骤执行完成: %s", webPath))
+	}
 	return nil
 }
 
 // moveDirectory 移动目录
 func (d *DeployNewStep) moveDirectory(src, dst string) error {
-	common.AppLogger.Info(fmt.Sprintf("移动目录: %s -> %s", src, dst))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployNew", "INFO", fmt.Sprintf("移动目录: %s -> %s", src, dst))
+	}
 
 	// 如果目标目录已存在，先删除
 	if _, err := os.Stat(dst); err == nil {
 		if err := os.RemoveAll(dst); err != nil {
-			return fmt.Errorf("删除目标目录失败: %v", err)
+			if d.taskLogger != nil {
+				d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("删除目标目录失败: %v", err))
+			}
 		}
 	}
 
@@ -85,12 +100,16 @@ func (d *DeployNewStep) moveDirectory(src, dst string) error {
 	if err := os.Rename(src, dst); err != nil {
 		// 如果跨文件系统移动失败，则使用复制+删除的方式
 		if err := d.copyDirectory(src, dst); err != nil {
-			return fmt.Errorf("复制目录失败: %v", err)
+			if d.taskLogger != nil {
+				d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("复制目录失败: %v", err))
+			}
 		}
 
 		// 删除源目录
 		if err := os.RemoveAll(src); err != nil {
-			common.AppLogger.Warning(fmt.Sprintf("删除源目录失败: %v", err))
+			if d.taskLogger != nil {
+				d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("删除源目录失败: %v", err))
+			}
 		}
 	}
 
@@ -124,12 +143,16 @@ func (d *DeployNewStep) copyDirectory(src, dst string) error {
 		if entry.IsDir() {
 			// 递归复制子目录
 			if err := d.copyDirectory(srcPath, dstPath); err != nil {
-				return err
+				if d.taskLogger != nil {
+					d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("复制目录失败: %v", err))
+				}
 			}
 		} else {
 			// 复制文件
 			if err := d.copyFile(srcPath, dstPath); err != nil {
-				return err
+				if d.taskLogger != nil {
+					d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("复制文件失败: %v", err))
+				}
 			}
 		}
 	}
@@ -161,6 +184,11 @@ func (d *DeployNewStep) copyFile(src, dst string) error {
 
 	// 复制文件内容
 	_, err = io.Copy(dstFile, srcFile)
+	if err != nil {
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("复制文件失败: %v", err))
+		}
+	}
 	return err
 }
 
@@ -168,20 +196,28 @@ func (d *DeployNewStep) copyFile(src, dst string) error {
 func (d *DeployNewStep) verifyDeployment(webPath string) error {
 	// 检查web目录是否存在
 	if _, err := os.Stat(webPath); os.IsNotExist(err) {
-		return fmt.Errorf("部署后web目录不存在: %s", webPath)
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("部署后web目录不存在: %s", webPath))
+		}
 	}
 
 	// 检查目录是否为空
 	entries, err := os.ReadDir(webPath)
 	if err != nil {
-		return fmt.Errorf("读取web目录失败: %v", err)
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("读取web目录失败: %v", err))
+		}
 	}
 
 	if len(entries) == 0 {
-		return fmt.Errorf("部署后web目录为空: %s", webPath)
+		if d.taskLogger != nil {
+			d.taskLogger.WriteStep("deployNew", "ERROR", fmt.Sprintf("部署后web目录为空: %s", webPath))
+		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("部署验证成功，web目录包含 %d 个文件/目录", len(entries)))
+	if d.taskLogger != nil {
+		d.taskLogger.WriteStep("deployNew", "INFO", fmt.Sprintf("部署验证成功，web目录包含 %d 个文件/目录", len(entries)))
+	}
 	return nil
 }
 

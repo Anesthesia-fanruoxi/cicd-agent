@@ -37,32 +37,41 @@ func NewExtractProductStep(project, tag, category string, ctx context.Context, z
 // Execute 执行解压产物
 func (e *ExtractProductStep) Execute() error {
 	logMsg := fmt.Sprintf("开始执行解压产物步骤: 项目=%s, 标签=%s, 分类=%s", e.project, e.tag, e.category)
-	common.AppLogger.Info(logMsg)
 	if e.taskLogger != nil {
 		e.taskLogger.WriteStep("extractProduct", "INFO", logMsg)
 	}
 
 	// 检查zip文件是否存在
 	if _, err := os.Stat(e.zipFilePath); os.IsNotExist(err) {
-		return fmt.Errorf("zip文件不存在: %s", e.zipFilePath)
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("zip文件不存在: %s", e.zipFilePath))
+		}
 	}
 
 	// 创建解压目录
 	extractDir := "/tmp/web-extract"
 	if err := os.RemoveAll(extractDir); err != nil {
-		common.AppLogger.Warning(fmt.Sprintf("清理解压目录失败: %v", err))
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("清理解压目录失败: %v", err))
+		}
 	}
 
 	if err := os.MkdirAll(extractDir, 0755); err != nil {
-		return fmt.Errorf("创建解压目录失败: %v", err)
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("创建解压目录失败: %v", err))
+		}
 	}
 
 	// 解压zip文件
 	if err := e.unzipFile(e.zipFilePath, extractDir); err != nil {
-		return fmt.Errorf("解压文件失败: %v", err)
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("解压文件失败: %v", err))
+		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("解压产物步骤执行完成: %s", e.zipFilePath))
+	if e.taskLogger != nil {
+		e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("解压产物步骤执行完成: %s", e.zipFilePath))
+	}
 	return nil
 }
 
@@ -71,7 +80,9 @@ func (e *ExtractProductStep) unzipFile(src, dest string) error {
 	// 打开zip文件
 	reader, err := zip.OpenReader(src)
 	if err != nil {
-		return fmt.Errorf("打开zip文件失败: %v", err)
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("打开zip文件失败: %v", err))
+		}
 	}
 	defer reader.Close()
 
@@ -82,34 +93,46 @@ func (e *ExtractProductStep) unzipFile(src, dest string) error {
 
 		// 安全检查，防止路径遍历攻击
 		if !strings.HasPrefix(path, filepath.Clean(dest)+string(os.PathSeparator)) {
-			common.AppLogger.Warning(fmt.Sprintf("跳过不安全的路径: %s", file.Name))
+			if e.taskLogger != nil {
+				e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("跳过不安全的路径: %s", file.Name))
+			}
 			continue
 		}
 
 		if file.FileInfo().IsDir() {
 			// 创建目录
 			if err := os.MkdirAll(path, file.FileInfo().Mode()); err != nil {
-				return fmt.Errorf("创建目录失败: %v", err)
+				if e.taskLogger != nil {
+					e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("创建目录失败: %v", err))
+				}
 			}
 			continue
 		}
 
 		// 创建父目录
 		if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
-			return fmt.Errorf("创建父目录失败: %v", err)
+			if e.taskLogger != nil {
+				e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("创建父目录失败: %v", err))
+			}
 		}
 
 		// 解压文件
 		if err := e.extractFile(file, path); err != nil {
-			return fmt.Errorf("解压文件 %s 失败: %v", file.Name, err)
+			if e.taskLogger != nil {
+				e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("解压文件 %s 失败: %v", file.Name, err))
+			}
 		}
 	}
 
-	common.AppLogger.Info(fmt.Sprintf("成功解压 %d 个文件到: %s", len(reader.File), dest))
+	if e.taskLogger != nil {
+		e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("成功解压 %d 个文件到: %s", len(reader.File), dest))
+	}
 
 	// 调试：列出解压后的目录结构
 	if err := e.listExtractedFiles(dest); err != nil {
-		common.AppLogger.Warning(fmt.Sprintf("列出解压文件失败: %v", err))
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "ERROR", fmt.Sprintf("列出解压文件失败: %v", err))
+		}
 	}
 
 	return nil
@@ -148,18 +171,24 @@ func (e *ExtractProductStep) GetDistPath() string {
 	// 首先检查根目录下是否有dist子目录
 	distPath := filepath.Join(extractDir, "dist")
 	if _, err := os.Stat(distPath); err == nil {
-		common.AppLogger.Info(fmt.Sprintf("找到dist子目录: %s", distPath))
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("找到dist子目录: %s", distPath))
+		}
 		return distPath
 	}
 
 	// 如果根目录没有dist，搜索子目录中的dist
 	if foundPath := e.findDistDirectory(extractDir); foundPath != "" {
-		common.AppLogger.Info(fmt.Sprintf("在子目录中找到dist: %s", foundPath))
+		if e.taskLogger != nil {
+			e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("在子目录中找到dist: %s", foundPath))
+		}
 		return foundPath
 	}
 
 	// 如果找不到dist目录，直接使用解压根目录
-	common.AppLogger.Info(fmt.Sprintf("未找到dist目录，使用解压根目录: %s", extractDir))
+	if e.taskLogger != nil {
+		e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("未找到dist目录，使用解压根目录: %s", extractDir))
+	}
 	return extractDir
 }
 
@@ -195,7 +224,9 @@ func (e *ExtractProductStep) findDistDirectory(dir string) string {
 
 // listExtractedFiles 列出解压后的文件结构（调试用）
 func (e *ExtractProductStep) listExtractedFiles(dir string) error {
-	common.AppLogger.Info(fmt.Sprintf("解压后的目录结构 (%s):", dir))
+	if e.taskLogger != nil {
+		e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("解压后的目录结构 (%s):", dir))
+	}
 
 	entries, err := os.ReadDir(dir)
 	if err != nil {
@@ -204,21 +235,29 @@ func (e *ExtractProductStep) listExtractedFiles(dir string) error {
 
 	for _, entry := range entries {
 		if entry.IsDir() {
-			common.AppLogger.Info(fmt.Sprintf("  [目录] %s/", entry.Name()))
+			if e.taskLogger != nil {
+				e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("  [目录] %s/", entry.Name()))
+			}
 			// 递归列出子目录（最多2层）
 			subDir := filepath.Join(dir, entry.Name())
 			subEntries, err := os.ReadDir(subDir)
 			if err == nil && len(subEntries) <= 10 { // 避免输出过多
 				for _, subEntry := range subEntries {
 					if subEntry.IsDir() {
-						common.AppLogger.Info(fmt.Sprintf("    [目录] %s/", subEntry.Name()))
+						if e.taskLogger != nil {
+							e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("    [目录] %s/", subEntry.Name()))
+						}
 					} else {
-						common.AppLogger.Info(fmt.Sprintf("    [文件] %s", subEntry.Name()))
+						if e.taskLogger != nil {
+							e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("    [文件] %s", subEntry.Name()))
+						}
 					}
 				}
 			}
 		} else {
-			common.AppLogger.Info(fmt.Sprintf("  [文件] %s", entry.Name()))
+			if e.taskLogger != nil {
+				e.taskLogger.WriteStep("extractProduct", "INFO", fmt.Sprintf("  [文件] %s", entry.Name()))
+			}
 		}
 	}
 
