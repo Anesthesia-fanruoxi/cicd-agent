@@ -43,7 +43,25 @@ func HandleUpdate(c *gin.Context) {
 
 	//common.AppLogger.Info("收到更新请求:", fmt.Sprintf("项目=%s, 类型=%s, 分类=%s", req.Project, req.Type, req.Category))
 
-	// 所有请求都进行远程调用
+	// 验证项目是否有效
+	if !config.AppConfig.IsValidProject(req.Project) {
+		errMsg := fmt.Sprintf("项目 %s 不在有效项目列表中", req.Project)
+		common.AppLogger.Error("项目验证失败:", errMsg)
+		c.JSON(http.StatusBadRequest, Response{Code: 400, Msg: errMsg})
+		return
+	}
+
+	// 验证项目是否配置了部署目录（仅Java项目需要验证，Web项目可以自动创建目录）
+	if !strings.Contains(req.Project, "-web") {
+		if _, exists := config.AppConfig.GetProjectPath(req.Project); !exists {
+			errMsg := fmt.Sprintf("项目 %s 未配置部署目录", req.Project)
+			common.AppLogger.Error("配置验证失败:", errMsg)
+			c.JSON(http.StatusBadRequest, Response{Code: 400, Msg: errMsg})
+			return
+		}
+	}
+
+	// 验证通过，进行远程调用
 	if err := callRemoteAPI(req); err != nil {
 		common.AppLogger.Error("调用远程API失败:", err)
 		c.JSON(http.StatusInternalServerError, Response{Code: 500, Msg: "调用远程API失败"})
@@ -134,11 +152,11 @@ func HandleCallback(c *gin.Context) {
 				req.Project,
 				req.Category,
 				req.Tag,
-				req.Description,
+				req.ProjectName,
 				taskID,
 				ctx,
-				req.OpsFeishuURL,
-				req.ProFeishuURL,
+				req.UpdateFeishuURL,
+				req.NotifyFeishuURL,
 				req.CreateTime,
 				req.StepDurations,
 			)
@@ -156,11 +174,11 @@ func HandleCallback(c *gin.Context) {
 				processor := javaBuild.NewDoubleVersionProcessor(
 					req.Project,
 					req.Tag,
-					req.Description,
+					req.ProjectName,
 					taskID,
 					ctx,
-					req.OpsFeishuURL,
-					req.ProFeishuURL,
+					req.UpdateFeishuURL,
+					req.NotifyFeishuURL,
 					req.CreateTime,
 					req.StepDurations,
 				)
@@ -177,11 +195,11 @@ func HandleCallback(c *gin.Context) {
 					req.Project,
 					req.Category,
 					req.Tag,
-					req.Description,
+					req.ProjectName,
 					taskID,
 					ctx,
-					req.OpsFeishuURL,
-					req.ProFeishuURL,
+					req.UpdateFeishuURL,
+					req.NotifyFeishuURL,
 					req.CreateTime,
 					req.StepDurations,
 				)

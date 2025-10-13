@@ -21,7 +21,7 @@ import (
 type DoubleVersionProcessor struct {
 	project       string
 	tag           string
-	description   string
+	projectName   string
 	taskID        string
 	ctx           context.Context
 	startedAt     string
@@ -32,11 +32,11 @@ type DoubleVersionProcessor struct {
 }
 
 // NewDoubleVersionProcessor 创建双版本部署处理器
-func NewDoubleVersionProcessor(project, tag, description, taskID string, ctx context.Context, opsURL, proURL, createTime string, stepDurations map[string]interface{}) *DoubleVersionProcessor {
+func NewDoubleVersionProcessor(project, tag, projectName, taskID string, ctx context.Context, opsURL, proURL, createTime string, stepDurations map[string]interface{}) *DoubleVersionProcessor {
 	return &DoubleVersionProcessor{
 		project:       project,
 		tag:           tag,
-		description:   description,
+		projectName:   projectName,
 		taskID:        taskID,
 		ctx:           ctx,
 		startedAt:     createTime,
@@ -118,7 +118,7 @@ func (r *DoubleVersionProcessor) ProcessDoubleVersionDeployment() error {
 			common.AppLogger.Error("发送任务完成通知失败:", err)
 		}
 		// 发送飞书完成通知
-		if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "double", "", r.description); err != nil {
+		if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "double", "", r.projectName); err != nil {
 			common.AppLogger.Error("发送飞书卡片通知失败:", err)
 		}
 		common.AppLogger.Info("双版本部署请求处理完成", fmt.Sprintf("项目=%s, 标签=%s", r.project, r.tag))
@@ -158,7 +158,7 @@ func (r *DoubleVersionProcessor) ProcessDoubleVersionDeployment() error {
 		common.AppLogger.Error("发送任务完成通知失败:", err)
 	}
 	// 发送飞书完成通知
-	if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "double", "", r.description); err != nil {
+	if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "double", "", r.projectName); err != nil {
 		common.AppLogger.Error("发送飞书卡片通知失败:", err)
 	}
 	common.AppLogger.Info("双版本部署请求处理完成", fmt.Sprintf("项目=%s, 标签=%s", r.project, r.tag))
@@ -638,7 +638,7 @@ func (r *DoubleVersionProcessor) sendFailureNotifications() {
 	}
 
 	// 发送飞书失败通知
-	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "failed", r.startedAt, endTime, "double", "", r.description); feishuErr != nil {
+	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "failed", r.startedAt, endTime, "double", "", r.projectName); feishuErr != nil {
 		common.AppLogger.Error("发送飞书失败通知失败:", feishuErr)
 	}
 }
@@ -653,7 +653,7 @@ func (r *DoubleVersionProcessor) sendCancelNotifications() {
 	}
 
 	// 发送飞书取消通知
-	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "cancel", r.startedAt, endTime, "double", "", r.description); feishuErr != nil {
+	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "cancel", r.startedAt, endTime, "double", "", r.projectName); feishuErr != nil {
 		common.AppLogger.Error("发送飞书取消通知失败:", feishuErr)
 	}
 }

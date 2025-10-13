@@ -9,17 +9,17 @@ type UpdateRequest struct {
 
 // CallbackRequest 回调请求结构
 type CallbackRequest struct {
-	Project       string                 `json:"project" binding:"required"`
-	Category      string                 `json:"category"`
-	Status        string                 `json:"status" binding:"required"`
-	Tag           string                 `json:"tag" binding:"required"`
-	TaskID        string                 `json:"task_id"`
-	CreateTime    string                 `json:"create_time"`
-	Description   string                 `json:"description"`
-	FinishedAt    string                 `json:"finished_at"`
-	ProFeishuURL  string                 `json:"pro_feishu_url"`
-	OpsFeishuURL  string                 `json:"ops_feishu_url"`
-	StepDurations map[string]interface{} `json:"step_durations"`
+	Project         string                 `json:"project" binding:"required"`
+	Category        string                 `json:"category"`
+	Status          string                 `json:"status" binding:"required"`
+	Tag             string                 `json:"tag" binding:"required"`
+	TaskID          string                 `json:"task_id"`
+	CreateTime      string                 `json:"create_time"`
+	ProjectName     string                 `json:"project_name"`
+	FinishedAt      string                 `json:"finished_at"`
+	UpdateFeishuURL string                 `json:"update_feishu"` // ops -> update
+	NotifyFeishuURL string                 `json:"notify_feishu"` // pro -> notify
+	StepDurations   map[string]interface{} `json:"step_durations"`
 }
 
 // RemoteCallRequest 远程调用请求结构

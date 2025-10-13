@@ -59,14 +59,14 @@ type FeishuDivider struct {
 }
 
 // SendFeishuCard 发送飞书卡片通知
-func SendFeishuCard(webhookURL, project, tag, status, startTime, endTime, deployType, category, description string) error {
+func SendFeishuCard(webhookURL, project, tag, status, startTime, endTime, deployType, category, projectName string) error {
 	if webhookURL == "" {
 		AppLogger.Info("飞书通知URL为空，跳过发送")
 		return nil
 	}
 
 	// 构建卡片消息
-	card := buildTaskCard(project, tag, status, startTime, endTime, deployType, category, description)
+	card := buildTaskCard(project, tag, status, startTime, endTime, deployType, category, projectName)
 
 	// 序列化为JSON
 	jsonData, err := json.Marshal(card)
@@ -90,21 +90,21 @@ func SendFeishuCard(webhookURL, project, tag, status, startTime, endTime, deploy
 }
 
 // buildTaskCard 构建任务卡片
-func buildTaskCard(project, tag, status, startTime, endTime, deployType, category, description string) FeishuCardMessage {
+func buildTaskCard(project, tag, status, startTime, endTime, deployType, category, projectName string) FeishuCardMessage {
 	// 根据状态设置颜色和标题
 	var template, title, statusText string
 	switch status {
 	case "complete":
 		template = "green"
-		title = fmt.Sprintf("🎉 【%s】部署成功", description)
+		title = fmt.Sprintf("🎉 【%s】部署成功", projectName)
 		statusText = "✅ 部署完成"
 	case "failed":
 		template = "red"
-		title = fmt.Sprintf("❌ 【%s】部署失败", description)
+		title = fmt.Sprintf("❌ 【%s】部署失败", projectName)
 		statusText = "❌ 部署失败"
 	case "cancel":
 		template = "grey"
-		title = fmt.Sprintf("⏹️ 【%s】部署取消", description)
+		title = fmt.Sprintf("⏹️ 【%s】部署取消", projectName)
 		statusText = "⏹️ 部署取消"
 	default:
 		template = "blue"
