@@ -92,8 +92,8 @@ type NotificationConfig struct {
 
 // TrafficProxyConfig 流量代理配置
 type TrafficProxyConfig struct {
-	Enable   bool   `yaml:"enable"`
-	ProxyURL string `yaml:"proxy_url"`
+	Enable   bool                `yaml:"enable"`
+	Projects map[string][]string `yaml:",inline"` // 项目名 -> 代理地址列表
 }
 
 var AppConfig *Config
@@ -112,6 +112,11 @@ func LoadConfig(configPath string) (*Config, error) {
 	config := &Config{}
 	if err := yaml.Unmarshal(data, config); err != nil {
 		return nil, fmt.Errorf("解析配置文件失败: %v", err)
+	}
+
+	// 初始化 Projects map（如果为空）
+	if config.TrafficProxy.Projects == nil {
+		config.TrafficProxy.Projects = make(map[string][]string)
 	}
 
 	AppConfig = config
@@ -232,9 +237,12 @@ func (c *Config) GetWebDownloadDir() string {
 	return c.Web.DownloadDir
 }
 
-// GetTrafficProxyURL 获取流量代理URL
-func (c *Config) GetTrafficProxyURL() string {
-	return c.TrafficProxy.ProxyURL
+// GetTrafficProxyURLs 根据项目名获取流量代理URL列表
+func (c *Config) GetTrafficProxyURLs(projectName string) []string {
+	if urls, exists := c.TrafficProxy.Projects[projectName]; exists {
+		return urls
+	}
+	return []string{}
 }
 
 // GetTrafficProxyEnable 获取流量代理是否开启

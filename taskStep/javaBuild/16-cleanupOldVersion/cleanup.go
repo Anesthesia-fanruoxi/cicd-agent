@@ -54,13 +54,13 @@ func (vc *VersionCleaner) Execute(ctx context.Context, step taskStep.Step) error
 		return nil
 	}
 
-	// 删除旧版本部署
-	if err := vc.deleteDeployment(ctx, vc.targetDeploymentDir); err != nil {
-		return fmt.Errorf("删除旧版本部署失败: %v", err)
+	// 缩容旧版本部署到0副本
+	if err := vc.scaleDeploymentToZero(ctx); err != nil {
+		return fmt.Errorf("缩容旧版本部署失败: %v", err)
 	}
 
 	if vc.taskLogger != nil {
-		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("成功删除旧版本部署: %s", vc.targetDeploymentDir))
+		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("成功将旧版本部署缩容到0副本: %s", vc.targetNamespace))
 	}
 	return nil
 }
@@ -72,14 +72,46 @@ func (vc *VersionCleaner) deploymentDirExists(dir string) bool {
 	return err == nil
 }
 
-// deleteDeployment 删除指定的部署目录
-func (vc *VersionCleaner) deleteDeployment(ctx context.Context, deploymentDir string) error {
+// scaleDeploymentToZero 将namespace下所有deployment缩容到0副本
+func (vc *VersionCleaner) scaleDeploymentToZero(ctx context.Context) error {
 	if vc.taskLogger != nil {
-		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("开始删除部署: %s", deploymentDir))
+		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("开始将namespace %s 下的deployment缩容到0副本", vc.targetNamespace))
 	}
 
-	// 执行kubectl delete -f 命令
-	cmd := exec.CommandContext(ctx, "kubectl", "delete", "-f", deploymentDir, "--timeout=300s")
+	// 获取namespace下所有deployment名称
+	deployments, err := vc.getDeploymentsInNamespace(ctx)
+	if err != nil {
+		return fmt.Errorf("获取deployment列表失败: %v", err)
+	}
+
+	if len(deployments) == 0 {
+		if vc.taskLogger != nil {
+			vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("namespace %s 中没有deployment，无需缩容", vc.targetNamespace))
+		}
+		return nil
+	}
+
+	if vc.taskLogger != nil {
+		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("找到 %d 个deployment，开始缩容", len(deployments)))
+	}
+
+	// 逐个将deployment缩容到0
+	for _, deployment := range deployments {
+		if err := vc.scaleDeployment(ctx, deployment, 0); err != nil {
+			if vc.taskLogger != nil {
+				vc.taskLogger.WriteStep("cleanupOldVersion", "ERROR", fmt.Sprintf("缩容deployment %s 失败: %v", deployment, err))
+			}
+			return err
+		}
+	}
+
+	// 等待所有pod完全删除
+	return vc.waitForResourcesDeletion(ctx, vc.targetDeploymentDir, 3*time.Minute)
+}
+
+// getDeploymentsInNamespace 获取指定namespace下所有deployment名称
+func (vc *VersionCleaner) getDeploymentsInNamespace(ctx context.Context) ([]string, error) {
+	cmd := exec.CommandContext(ctx, "kubectl", "get", "deployment", "-n", vc.targetNamespace, "-o", "jsonpath={.items[*].metadata.name}")
 	output, err := cmd.CombinedOutput()
 
 	// 写入命令执行日志
@@ -88,27 +120,44 @@ func (vc *VersionCleaner) deleteDeployment(ctx context.Context, deploymentDir st
 	}
 
 	if err != nil {
-		// 检查是否是因为资源不存在而失败
+		// 如果namespace不存在或没有deployment，返回空列表
 		if strings.Contains(string(output), "not found") || strings.Contains(string(output), "No resources found") {
-			if vc.taskLogger != nil {
-				vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("部署资源 %s 不存在，无需删除", deploymentDir))
-			}
-			return nil
+			return []string{}, nil
 		}
-		errMsg := fmt.Sprintf("删除部署失败: %v, 输出: %s", err, string(output))
-		if vc.taskLogger != nil {
-			vc.taskLogger.WriteStep("cleanupOldVersion", "ERROR", errMsg)
-		}
-		return fmt.Errorf(errMsg)
+		return nil, fmt.Errorf("获取deployment列表失败: %v, 输出: %s", err, string(output))
+	}
+
+	// 解析deployment名称列表
+	deploymentNames := strings.Fields(strings.TrimSpace(string(output)))
+	return deploymentNames, nil
+}
+
+// scaleDeployment 将指定deployment缩容到指定副本数
+func (vc *VersionCleaner) scaleDeployment(ctx context.Context, deploymentName string, replicas int) error {
+	if vc.taskLogger != nil {
+		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("缩容deployment %s 到 %d 副本", deploymentName, replicas))
+	}
+
+	// 执行kubectl scale命令
+	cmd := exec.CommandContext(ctx, "kubectl", "scale", "deployment", deploymentName,
+		"-n", vc.targetNamespace,
+		"--replicas="+fmt.Sprintf("%d", replicas))
+	output, err := cmd.CombinedOutput()
+
+	// 写入命令执行日志
+	if vc.taskLogger != nil {
+		vc.taskLogger.WriteCommand("cleanupOldVersion", cmd.String(), output, err)
+	}
+
+	if err != nil {
+		return fmt.Errorf("缩容失败: %v, 输出: %s", err, string(output))
 	}
 
 	if vc.taskLogger != nil {
-		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("部署 %s 删除命令执行成功", deploymentDir))
-		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("删除输出: %s", string(output)))
+		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", fmt.Sprintf("deployment %s 缩容命令执行成功: %s", deploymentName, string(output)))
 	}
 
-	// 等待资源完全删除
-	return vc.waitForResourcesDeletion(ctx, deploymentDir, 3*time.Minute)
+	return nil
 }
 
 // waitForResourcesDeletion 等待pod完全删除

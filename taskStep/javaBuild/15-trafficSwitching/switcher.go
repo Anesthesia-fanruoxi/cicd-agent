@@ -60,8 +60,8 @@ func (ts *TrafficSwitcher) Execute(ctx context.Context, step taskStep.Step) erro
 
 // executeProxySwitch 通过流量代理切换
 func (ts *TrafficSwitcher) executeProxySwitch(ctx context.Context) error {
-	// 创建流量代理切换器
-	proxySwitcher := NewProxySwitcher(ts.version, ts.taskLogger)
+	// 创建流量代理切换器（serviceName即为项目名）
+	proxySwitcher := NewProxySwitcher(ts.version, ts.serviceName, ts.taskLogger)
 
 	// 执行切换
 	if err := proxySwitcher.Execute(ctx); err != nil {
