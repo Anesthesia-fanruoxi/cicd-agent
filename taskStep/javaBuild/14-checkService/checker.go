@@ -792,7 +792,7 @@ func (c *ServiceChecker) getAllPodsWithStatus(ctx context.Context, namespace str
 
 // checkPodsHealthiness 第二阶段：检查服务健康状态（每次重新获取pod列表）
 func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace string) error {
-	maxDuration := 1 * time.Minute   // 最大检查时间3分钟
+	maxDuration := 3 * time.Minute   // 最大检查时间3分钟
 	checkInterval := 3 * time.Second // 每3秒检查一轮
 
 	deadline := time.Now().Add(maxDuration)

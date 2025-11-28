@@ -92,8 +92,9 @@ type NotificationConfig struct {
 
 // TrafficProxyConfig 流量代理配置
 type TrafficProxyConfig struct {
-	Enable   bool                `yaml:"enable"`
-	Projects map[string][]string `yaml:",inline"` // 项目名 -> 代理地址列表
+	Enable bool     `yaml:"enable"`
+	JXH    []string `yaml:"jxh"`
+	YSH    []string `yaml:"ysh"`
 }
 
 var AppConfig *Config
@@ -114,10 +115,7 @@ func LoadConfig(configPath string) (*Config, error) {
 		return nil, fmt.Errorf("解析配置文件失败: %v", err)
 	}
 
-	// 初始化 Projects map（如果为空）
-	if config.TrafficProxy.Projects == nil {
-		config.TrafficProxy.Projects = make(map[string][]string)
-	}
+	// 初始化完成后无需特殊处理
 
 	AppConfig = config
 	log.Printf("配置加载成功: %s", configPath)

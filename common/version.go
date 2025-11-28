@@ -2,9 +2,11 @@ package common
 
 import (
 	"cicd-agent/config"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
+	"net/http"
 	"os"
 	"path/filepath"
 	"time"
@@ -15,6 +17,13 @@ type VersionInfo struct {
 	CurrentVersion string                 `json:"current_version"` // v1 或 v2
 	LastUpdated    string                 `json:"last_updated"`    // 最后更新时间
 	StepDurations  map[string]interface{} `json:"step_durations"`  // 上次各步骤执行时间
+}
+
+// StatusResponse 远程状态接口响应结构
+type StatusResponse struct {
+	Backends       map[string]string `json:"backends"`
+	CurrentBackend string            `json:"current_backend"`
+	CurrentVersion string            `json:"current_version"`
 }
 
 // GetCurrentVersion 读取版本文件，如果不存在则创建默认文件
@@ -77,8 +86,92 @@ func readVersionFile(filePath string) (*VersionInfo, error) {
 	return &versionInfo, nil
 }
 
-// GetVersion 获取当前版本号
+// getRemoteCurrentVersion 从流量代理接口获取当前版本
+func getRemoteCurrentVersion(ctx context.Context, project string) (string, error) {
+	// 检查流量代理是否开启
+	if !config.AppConfig.GetTrafficProxyEnable() {
+		return "", fmt.Errorf("流量代理未开启")
+	}
+
+	// 获取项目的代理地址列表
+	proxyURLs := config.AppConfig.GetTrafficProxyURLs(project)
+	if len(proxyURLs) == 0 {
+		return "", fmt.Errorf("项目 %s 未配置流量代理地址", project)
+	}
+
+	// 尝试每个代理地址
+	for _, baseURL := range proxyURLs {
+		version, err := tryGetVersionFromURL(ctx, baseURL+"/status")
+		if err == nil && version != "" {
+			AppLogger.Info(fmt.Sprintf("从远程接口获取版本成功: %s -> %s", baseURL, version))
+			return version, nil
+		}
+		AppLogger.Error(fmt.Sprintf("从远程接口获取版本失败: %s, 错误: %v", baseURL, err))
+	}
+
+	return "", fmt.Errorf("所有代理地址均无法获取版本信息")
+}
+
+// tryGetVersionFromURL 尝试从指定URL获取版本信息
+func tryGetVersionFromURL(ctx context.Context, url string) (string, error) {
+	// 创建带超时的HTTP客户端
+	client := &http.Client{
+		Timeout: 3 * time.Second,
+	}
+
+	// 创建请求
+	req, err := http.NewRequestWithContext(ctx, "GET", url, nil)
+	if err != nil {
+		return "", fmt.Errorf("创建请求失败: %v", err)
+	}
+
+	// 发送请求
+	resp, err := client.Do(req)
+	if err != nil {
+		return "", fmt.Errorf("请求失败: %v", err)
+	}
+	defer resp.Body.Close()
+
+	// 检查状态码
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("HTTP状态码错误: %d", resp.StatusCode)
+	}
+
+	// 读取响应体
+	body, err := ioutil.ReadAll(resp.Body)
+	if err != nil {
+		return "", fmt.Errorf("读取响应失败: %v", err)
+	}
+
+	// 解析JSON
+	var statusResp StatusResponse
+	if err := json.Unmarshal(body, &statusResp); err != nil {
+		return "", fmt.Errorf("解析JSON失败: %v", err)
+	}
+
+	// 返回版本信息
+	if statusResp.CurrentVersion == "" {
+		return "", fmt.Errorf("响应中current_version为空")
+	}
+
+	return statusResp.CurrentVersion, nil
+}
+
+// GetVersion 获取当前版本号（优先从远程接口获取，失败则读取本地）
 func GetVersion(project string) (string, error) {
+	// 创建5秒超时的context
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// 优先尝试从远程接口获取
+	if remoteVersion, err := getRemoteCurrentVersion(ctx, project); err == nil {
+		return remoteVersion, nil
+		AppLogger.Info(fmt.Sprintf("远程获取版本成功: %s", remoteVersion))
+	} else {
+		AppLogger.Info(fmt.Sprintf("远程获取版本失败，回退到本地读取: %v", err))
+	}
+
+	// 远程获取失败，回退到本地读取
 	versionInfo, err := GetCurrentVersion(project)
 	if err != nil {
 		return "", err

@@ -82,37 +82,13 @@ func HandleCallback(c *gin.Context) {
 		c.Request.Body = io.NopCloser(bytes.NewReader(body))
 	}
 
-	// 先解析加密请求结构
-	var encryptedReq EncryptedRequest
-	if err := c.ShouldBindJSON(&encryptedReq); err != nil {
-		common.AppLogger.Error("加密请求参数绑定失败:", err)
+	// 直接解析明文回调请求
+	var req CallbackRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.AppLogger.Error("请求参数绑定失败:", err)
 		c.JSON(http.StatusBadRequest, Response{
 			Code: 400,
 			Msg:  fmt.Sprintf("请求参数错误: %v", err),
-		})
-		return
-	}
-
-	// 解密数据
-	decryptedData, err := common.DecryptAndDecompress(encryptedReq.Data)
-	if err != nil {
-		common.AppLogger.Error("解密回调数据失败:", err)
-		c.JSON(http.StatusBadRequest, Response{
-			Code: 400,
-			Msg:  fmt.Sprintf("解密数据失败: %v", err),
-		})
-		return
-	}
-
-	// common.AppLogger.Info("解密后的数据:", string(decryptedData))
-
-	// 解析解密后的回调请求
-	var req CallbackRequest
-	if err := json.Unmarshal(decryptedData, &req); err != nil {
-		common.AppLogger.Error("解析解密数据失败:", err)
-		c.JSON(http.StatusBadRequest, Response{
-			Code: 400,
-			Msg:  fmt.Sprintf("解析数据失败: %v", err),
 		})
 		return
 	}
@@ -225,35 +201,13 @@ func HandleCallback(c *gin.Context) {
 
 // HandleCancel 取消正在执行的任务
 func HandleCancel(c *gin.Context) {
-	// 先解析加密请求结构
-	var encryptedReq EncryptedRequest
-	if err := c.ShouldBindJSON(&encryptedReq); err != nil {
-		common.AppLogger.Error("加密取消请求参数绑定失败:", err)
+	// 直接解析明文取消请求
+	var req CancelRequest
+	if err := c.ShouldBindJSON(&req); err != nil {
+		common.AppLogger.Error("取消请求参数绑定失败:", err)
 		c.JSON(http.StatusBadRequest, Response{
 			Code: 400,
 			Msg:  fmt.Sprintf("请求参数错误: %v", err),
-		})
-		return
-	}
-
-	// 解密数据
-	decryptedData, err := common.DecryptAndDecompress(encryptedReq.Data)
-	if err != nil {
-		common.AppLogger.Error("解密取消请求数据失败:", err)
-		c.JSON(http.StatusBadRequest, Response{
-			Code: 400,
-			Msg:  fmt.Sprintf("解密数据失败: %v", err),
-		})
-		return
-	}
-
-	// 解析解密后的取消请求
-	var req CancelRequest
-	if err := json.Unmarshal(decryptedData, &req); err != nil {
-		common.AppLogger.Error("解析解密取消数据失败:", err)
-		c.JSON(http.StatusBadRequest, Response{
-			Code: 400,
-			Msg:  fmt.Sprintf("解析数据失败: %v", err),
 		})
 		return
 	}
