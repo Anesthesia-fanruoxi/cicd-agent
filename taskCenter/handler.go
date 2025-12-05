@@ -8,11 +8,11 @@ import (
 	"cicd-agent/taskStep/webBuild"
 	"encoding/json"
 	"fmt"
-	"github.com/gin-gonic/gin"
 	"io"
 	"net/http"
-	"strings"
 	"time"
+
+	"github.com/gin-gonic/gin"
 )
 
 // HandleUpdate 处理更新请求
@@ -52,12 +52,21 @@ func HandleUpdate(c *gin.Context) {
 	}
 
 	// 验证项目是否配置了部署目录（仅Java项目需要验证，Web项目可以自动创建目录）
-	if !strings.Contains(req.Project, "-web") {
+	if req.Type != "web" {
 		if _, exists := config.AppConfig.GetProjectPath(req.Project); !exists {
 			errMsg := fmt.Sprintf("项目 %s 未配置部署目录", req.Project)
 			common.AppLogger.Error("配置验证失败:", errMsg)
 			c.JSON(http.StatusBadRequest, Response{Code: 400, Msg: errMsg})
 			return
+		}
+
+		// 如果type为空，说明是后端项目，自动判断是double还是single
+		if req.Type == "" {
+			if config.AppConfig.IsDoubleProject(req.Project) {
+				req.Type = "double"
+			} else {
+				req.Type = "single"
+			}
 		}
 	}
 
@@ -120,9 +129,8 @@ func HandleCallback(c *gin.Context) {
 		// 为任务创建可取消的上下文（供外部取消接口使用）
 		ctx, _ := common.CreateTaskContext(taskID)
 
-		// 根据项目名称判断构建类型
-		// 如果项目名称包含"-web"，则使用webBuildApi，否则使用javaBuildApi
-		if strings.Contains(req.Project, "-web") {
+		// 根据type字段判断构建类型: web/double/single
+		if req.Type == "web" {
 			// Web项目构建
 			processor := webBuild.NewRemoteProcessor(
 				req.Project,
@@ -143,49 +151,46 @@ func HandleCallback(c *gin.Context) {
 				common.AppLogger.Info("web构建处理成功:", fmt.Sprintf("项目=%s, 标签=%s",
 					req.Project, req.Tag))
 			}
-		} else {
-			// Java项目构建 - 根据项目版本结构选择处理器
-			if common.HasVersionStructure(req.Project) {
-				// 双版本部署
-				processor := javaBuild.NewDoubleVersionProcessor(
-					req.Project,
-					req.Tag,
-					req.ProjectName,
-					taskID,
-					ctx,
-					req.UpdateFeishuURL,
-					req.NotifyFeishuURL,
-					req.CreateTime,
-					req.StepDurations,
-				)
-				if err := processor.ProcessDoubleVersionDeployment(); err != nil {
-					common.AppLogger.Error("双版本java构建处理失败:", fmt.Sprintf("项目=%s, 标签=%s, 错误=%v",
-						req.Project, req.Tag, err))
-				} else {
-					common.AppLogger.Info("双版本java构建处理成功:", fmt.Sprintf("项目=%s, 标签=%s",
-						req.Project, req.Tag))
-				}
+		} else if req.Type == "double" {
+			// Java双版本部署
+			processor := javaBuild.NewDoubleVersionProcessor(
+				req.Project,
+				req.Tag,
+				req.ProjectName,
+				taskID,
+				ctx,
+				req.UpdateFeishuURL,
+				req.NotifyFeishuURL,
+				req.CreateTime,
+				req.StepDurations,
+			)
+			if err := processor.ProcessDoubleVersionDeployment(); err != nil {
+				common.AppLogger.Error("双版本java构建处理失败:", fmt.Sprintf("项目=%s, 标签=%s, 错误=%v",
+					req.Project, req.Tag, err))
 			} else {
-				// 单版本部署
-				processor := javaBuild.NewSingleVersionProcessor(
-					req.Project,
-					req.Category,
-					req.Tag,
-					req.ProjectName,
-					taskID,
-					ctx,
-					req.UpdateFeishuURL,
-					req.NotifyFeishuURL,
-					req.CreateTime,
-					req.StepDurations,
-				)
-				if err := processor.ProcessSingleVersionDeployment(); err != nil {
-					common.AppLogger.Error("单版本java构建处理失败:", fmt.Sprintf("项目=%s, 标签=%s, 错误=%v",
-						req.Project, req.Tag, err))
-				} else {
-					common.AppLogger.Info("单版本java构建处理成功:", fmt.Sprintf("项目=%s, 标签=%s",
-						req.Project, req.Tag))
-				}
+				common.AppLogger.Info("双版本java构建处理成功:", fmt.Sprintf("项目=%s, 标签=%s",
+					req.Project, req.Tag))
+			}
+		} else {
+			// Java单版本部署 (type == "single" 或其他)
+			processor := javaBuild.NewSingleVersionProcessor(
+				req.Project,
+				req.Category,
+				req.Tag,
+				req.ProjectName,
+				taskID,
+				ctx,
+				req.UpdateFeishuURL,
+				req.NotifyFeishuURL,
+				req.CreateTime,
+				req.StepDurations,
+			)
+			if err := processor.ProcessSingleVersionDeployment(); err != nil {
+				common.AppLogger.Error("单版本java构建处理失败:", fmt.Sprintf("项目=%s, 标签=%s, 错误=%v",
+					req.Project, req.Tag, err))
+			} else {
+				common.AppLogger.Info("单版本java构建处理成功:", fmt.Sprintf("项目=%s, 标签=%s",
+					req.Project, req.Tag))
 			}
 		}
 
@@ -232,6 +237,7 @@ func callRemoteAPI(req UpdateRequest) error {
 	remoteReq := RemoteCallRequest{
 		Project:     req.Project,
 		CallbackURL: callbackURL,
+		Type:        req.Type,
 		Category:    req.Category,
 	}
 

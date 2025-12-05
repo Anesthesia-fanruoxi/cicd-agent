@@ -1,9 +1,11 @@
 package pullOnline
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os/exec"
+	"strings"
 	"sync"
 
 	"cicd-agent/common"
@@ -21,6 +23,119 @@ func NewImagePuller(taskID string, taskLogger *common.TaskLogger) *ImagePuller {
 		taskID:     taskID,
 		taskLogger: taskLogger,
 	}
+}
+
+// CleanProjectImages 清理指定项目的所有旧镜像（包括online和local harbor）
+func (p *ImagePuller) CleanProjectImages(ctx context.Context, projectName string) error {
+	if projectName == "" {
+		return fmt.Errorf("项目名称为空")
+	}
+
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("开始清理项目 %s 的旧镜像", projectName))
+	}
+
+	// 获取所有本地镜像
+	cmd := exec.CommandContext(ctx, "docker", "images", "--format", "{{.Repository}}:{{.Tag}}")
+	output, err := cmd.Output()
+	if err != nil {
+		if p.taskLogger != nil {
+			p.taskLogger.WriteStep("pullOnline", "ERROR", fmt.Sprintf("获取镜像列表失败: %v", err))
+		}
+		return fmt.Errorf("获取镜像列表失败: %v", err)
+	}
+
+	// 解析镜像列表，筛选出需要删除的镜像
+	var imagesToDelete []string
+	scanner := bufio.NewScanner(strings.NewReader(string(output)))
+	for scanner.Scan() {
+		image := strings.TrimSpace(scanner.Text())
+		if image == "" || image == "<none>:<none>" {
+			continue
+		}
+
+		// 检查镜像是否属于当前项目（精准匹配 /项目名/）
+		if strings.Contains(image, "/"+projectName+"/") {
+			imagesToDelete = append(imagesToDelete, image)
+		}
+	}
+
+	if len(imagesToDelete) == 0 {
+		if p.taskLogger != nil {
+			p.taskLogger.WriteStep("pullOnline", "INFO", "没有需要清理的旧镜像")
+		}
+		return nil
+	}
+
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("找到 %d 个需要清理的镜像", len(imagesToDelete)))
+	}
+
+	// 并发删除镜像
+	return p.deleteImages(ctx, imagesToDelete)
+}
+
+// deleteImages 并发删除镜像
+func (p *ImagePuller) deleteImages(ctx context.Context, images []string) error {
+	maxConcurrency := p.calculatePullConcurrency(len(images))
+
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("删除镜像: 总数=%d, 并发数=%d", len(images), maxConcurrency))
+	}
+
+	semaphore := make(chan struct{}, maxConcurrency)
+	var wg sync.WaitGroup
+	var deletedCount int
+	var mu sync.Mutex
+
+	for _, img := range images {
+		wg.Add(1)
+		go func(image string) {
+			defer wg.Done()
+
+			select {
+			case <-ctx.Done():
+				return
+			case semaphore <- struct{}{}:
+			}
+			defer func() { <-semaphore }()
+
+			select {
+			case <-ctx.Done():
+				return
+			default:
+			}
+
+			cmd := exec.CommandContext(ctx, "docker", "rmi", "-f", image)
+			output, err := cmd.CombinedOutput()
+
+			if p.taskLogger != nil {
+				p.taskLogger.WriteCommand("pullOnline", "docker rmi -f "+image, output, err)
+			}
+
+			if err == nil {
+				mu.Lock()
+				deletedCount++
+				mu.Unlock()
+				if p.taskLogger != nil {
+					p.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("成功删除镜像: %s", image))
+				}
+			} else {
+				// 删除失败只记录警告，不中断流程
+				if p.taskLogger != nil {
+					p.taskLogger.WriteStep("pullOnline", "WARNING", fmt.Sprintf("删除镜像失败: %s, 错误: %v", image, err))
+				}
+			}
+		}(img)
+	}
+
+	wg.Wait()
+
+	if p.taskLogger != nil {
+		p.taskLogger.WriteStep("pullOnline", "INFO", fmt.Sprintf("镜像清理完成: 成功删除 %d 个", deletedCount))
+	}
+
+	return nil
 }
 
 // PullImages 并发拉取镜像（可取消）
@@ -134,4 +249,10 @@ func PullImages(ctx context.Context, images []string) error {
 	// 使用空的taskID和nil logger，因为这是包装函数
 	puller := NewImagePuller("", nil)
 	return puller.PullImages(ctx, images)
+}
+
+// CleanProjectImages 清理项目旧镜像（包装函数）
+func CleanProjectImages(ctx context.Context, projectName string) error {
+	puller := NewImagePuller("", nil)
+	return puller.CleanProjectImages(ctx, projectName)
 }

@@ -161,6 +161,15 @@ func (r *SingleVersionProcessor) step9PullOnline() error {
 
 	// 使用9-pullOnline模块拉取镜像（可取消）
 	puller := pullOnline.NewImagePuller(r.taskID, r.taskLogger)
+
+	// 清理旧镜像
+	if err := puller.CleanProjectImages(r.ctx, r.project); err != nil {
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("pullOnline", "WARNING", fmt.Sprintf("清理旧镜像失败: %v", err))
+		}
+		// 清理失败不中断流程，继续拉取
+	}
+
 	if err := puller.PullImages(r.ctx, images); err != nil {
 		// 检查是否是取消操作
 		if r.ctx.Err() == context.Canceled {

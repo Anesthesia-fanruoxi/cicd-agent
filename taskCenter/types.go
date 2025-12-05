@@ -10,6 +10,7 @@ type UpdateRequest struct {
 // CallbackRequest 回调请求结构
 type CallbackRequest struct {
 	Project         string                 `json:"project" binding:"required"`
+	Type            string                 `json:"type"` // double/single/web
 	Category        string                 `json:"category"`
 	Status          string                 `json:"status" binding:"required"`
 	Tag             string                 `json:"tag" binding:"required"`
@@ -26,6 +27,7 @@ type CallbackRequest struct {
 type RemoteCallRequest struct {
 	Project     string `json:"project"`
 	CallbackURL string `json:"callback_url"`
+	Type        string `json:"type,omitempty"` // double/single/web
 	Category    string `json:"category,omitempty"`
 }
 
