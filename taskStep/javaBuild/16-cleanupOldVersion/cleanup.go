@@ -33,16 +33,16 @@ func (vc *VersionCleaner) Execute(ctx context.Context, step taskStep.Step) error
 			vc.targetNamespace, vc.targetDeploymentDir))
 	}
 
-	// 等待30秒让新版本稳定运行
+	// 等待55秒让新版本稳定运行
 	if vc.taskLogger != nil {
-		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", "等待30秒让新版本稳定运行...")
+		vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", "等待55秒让新版本稳定运行...")
 	}
 	select {
 	case <-ctx.Done():
 		return ctx.Err()
-	case <-time.After(30 * time.Second):
+	case <-time.After(55 * time.Second):
 		if vc.taskLogger != nil {
-			vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", "等待30秒完成，开始清理旧版本")
+			vc.taskLogger.WriteStep("cleanupOldVersion", "INFO", "等待55秒完成，开始清理旧版本")
 		}
 	}
 

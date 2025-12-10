@@ -23,6 +23,7 @@ type DoubleVersionProcessor struct {
 	tag           string
 	projectName   string
 	taskID        string
+	deployType    string // 部署类型: web/single/double
 	ctx           context.Context
 	startedAt     string
 	opsURL        string
@@ -32,12 +33,13 @@ type DoubleVersionProcessor struct {
 }
 
 // NewDoubleVersionProcessor 创建双版本部署处理器
-func NewDoubleVersionProcessor(project, tag, projectName, taskID string, ctx context.Context, opsURL, proURL, createTime string, stepDurations map[string]interface{}) *DoubleVersionProcessor {
+func NewDoubleVersionProcessor(project, tag, projectName, taskID, deployType string, ctx context.Context, opsURL, proURL, createTime string, stepDurations map[string]interface{}) *DoubleVersionProcessor {
 	return &DoubleVersionProcessor{
 		project:       project,
 		tag:           tag,
 		projectName:   projectName,
 		taskID:        taskID,
+		deployType:    deployType,
 		ctx:           ctx,
 		startedAt:     createTime,
 		opsURL:        opsURL,
@@ -118,7 +120,7 @@ func (r *DoubleVersionProcessor) ProcessDoubleVersionDeployment() error {
 			common.AppLogger.Error("发送任务完成通知失败:", err)
 		}
 		// 发送飞书完成通知
-		if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "double", "", r.projectName); err != nil {
+		if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, r.deployType, "", r.projectName); err != nil {
 			common.AppLogger.Error("发送飞书卡片通知失败:", err)
 		}
 		common.AppLogger.Info("双版本部署请求处理完成", fmt.Sprintf("项目=%s, 标签=%s", r.project, r.tag))
@@ -158,7 +160,7 @@ func (r *DoubleVersionProcessor) ProcessDoubleVersionDeployment() error {
 		common.AppLogger.Error("发送任务完成通知失败:", err)
 	}
 	// 发送飞书完成通知
-	if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "double", "", r.projectName); err != nil {
+	if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, r.deployType, "", r.projectName); err != nil {
 		common.AppLogger.Error("发送飞书卡片通知失败:", err)
 	}
 	common.AppLogger.Info("双版本部署请求处理完成", fmt.Sprintf("项目=%s, 标签=%s", r.project, r.tag))
@@ -496,7 +498,7 @@ func (r *DoubleVersionProcessor) step14CheckServiceReady() error {
 	namespace := getNamespace(r.project, "next", r.taskLogger, "checkService")
 
 	// 使用14-checkService模块检查服务就绪状态（可取消）
-	checker := checkService.NewServiceChecker(r.taskID, r.taskLogger)
+	checker := checkService.NewServiceChecker(r.taskID, r.project, r.taskLogger)
 	if err := checker.CheckServicesReady(r.ctx, services, namespace); err != nil {
 		// 检查是否是取消操作
 		if r.ctx.Err() == context.Canceled {
@@ -569,6 +571,17 @@ func (r *DoubleVersionProcessor) step15TrafficSwitching() error {
 			r.taskLogger.WriteStep("trafficSwitching", "ERROR", fmt.Sprintf("流量切换失败: %v", err))
 		}
 		common.SendStepNotification(r.taskID, 15, "trafficSwitching", stepName, "failed", fmt.Sprintf("流量切换失败: %v", err), r.project, r.tag)
+
+		// 流量切换失败时执行缩容操作
+		if r.taskLogger != nil {
+			r.taskLogger.WriteStep("trafficSwitching", "WARNING", "流量切换失败，触发缩容回收资源")
+		}
+		checker := checkService.NewServiceChecker(r.taskID, r.project, r.taskLogger)
+		if scaleErr := checker.ScaleDownNamespaceWithStep(r.ctx, namespace, "trafficSwitching"); scaleErr != nil {
+			if r.taskLogger != nil {
+				r.taskLogger.WriteStep("trafficSwitching", "ERROR", fmt.Sprintf("缩容操作失败: %v", scaleErr))
+			}
+		}
 		return err
 	}
 
@@ -647,7 +660,7 @@ func (r *DoubleVersionProcessor) sendFailureNotifications() {
 	}
 
 	// 发送飞书失败通知
-	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "failed", r.startedAt, endTime, "double", "", r.projectName); feishuErr != nil {
+	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "failed", r.startedAt, endTime, r.deployType, "", r.projectName); feishuErr != nil {
 		common.AppLogger.Error("发送飞书失败通知失败:", feishuErr)
 	}
 }
@@ -662,7 +675,7 @@ func (r *DoubleVersionProcessor) sendCancelNotifications() {
 	}
 
 	// 发送飞书取消通知
-	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "cancel", r.startedAt, endTime, "double", "", r.projectName); feishuErr != nil {
+	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "cancel", r.startedAt, endTime, r.deployType, "", r.projectName); feishuErr != nil {
 		common.AppLogger.Error("发送飞书取消通知失败:", feishuErr)
 	}
 }

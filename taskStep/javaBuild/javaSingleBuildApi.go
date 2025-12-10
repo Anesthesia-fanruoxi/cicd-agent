@@ -19,6 +19,7 @@ type SingleVersionProcessor struct {
 	tag           string
 	projectName   string
 	taskID        string
+	deployType    string // 部署类型: web/single/double
 	ctx           context.Context
 	startedAt     string
 	opsURL        string
@@ -28,13 +29,14 @@ type SingleVersionProcessor struct {
 }
 
 // NewSingleVersionProcessor 创建单版本部署处理器
-func NewSingleVersionProcessor(project, category, tag, projectName, taskID string, ctx context.Context, opsURL, proURL, createTime string, stepDurations map[string]interface{}) *SingleVersionProcessor {
+func NewSingleVersionProcessor(project, category, tag, projectName, taskID, deployType string, ctx context.Context, opsURL, proURL, createTime string, stepDurations map[string]interface{}) *SingleVersionProcessor {
 	return &SingleVersionProcessor{
 		project:       project,
 		category:      category,
 		tag:           tag,
 		projectName:   projectName,
 		taskID:        taskID,
+		deployType:    deployType,
 		ctx:           ctx,
 		startedAt:     createTime,
 		opsURL:        opsURL,
@@ -114,7 +116,7 @@ func (r *SingleVersionProcessor) ProcessSingleVersionDeployment() error {
 	}
 
 	// 发送飞书卡片通知
-	if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, "single", r.category, r.projectName); err != nil {
+	if err := common.SendFeishuCard(r.opsURL, r.project, r.tag, "complete", r.startedAt, endTime, r.deployType, r.category, r.projectName); err != nil {
 		common.AppLogger.Error("发送飞书卡片通知失败:", err)
 	}
 	common.AppLogger.Info("单版本部署请求处理完成", fmt.Sprintf("项目=%s, 标签=%s, 分类=%s", r.project, r.tag, r.category))
@@ -420,7 +422,7 @@ func (r *SingleVersionProcessor) sendFailureNotifications() {
 	}
 
 	// 发送飞书失败通知
-	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "failed", r.startedAt, endTime, "single", r.category, r.projectName); feishuErr != nil {
+	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "failed", r.startedAt, endTime, r.deployType, r.category, r.projectName); feishuErr != nil {
 		common.AppLogger.Error("发送飞书失败通知失败:", feishuErr)
 	}
 }
@@ -435,7 +437,7 @@ func (r *SingleVersionProcessor) sendCancelNotifications() {
 	}
 
 	// 发送飞书取消通知
-	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "cancel", r.startedAt, endTime, "single", r.category, r.projectName); feishuErr != nil {
+	if feishuErr := common.SendFeishuCard(r.opsURL, r.project, r.tag, "cancel", r.startedAt, endTime, r.deployType, r.category, r.projectName); feishuErr != nil {
 		common.AppLogger.Error("发送飞书取消通知失败:", feishuErr)
 	}
 }

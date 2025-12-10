@@ -14,13 +14,28 @@ import (
 // ServiceChecker 服务检查器
 type ServiceChecker struct {
 	taskID     string
+	project    string
 	taskLogger *common.TaskLogger
 }
 
+// 不使用filebeat容器的项目列表（这些项目只有一个容器）
+var noFilebeatProjects = []string{"bjjf", "jzsk"}
+
+// needFilebeat 判断当前项目是否需要使用filebeat容器
+func (c *ServiceChecker) needFilebeat() bool {
+	for _, p := range noFilebeatProjects {
+		if c.project == p {
+			return false
+		}
+	}
+	return true
+}
+
 // NewServiceChecker 创建服务检查器
-func NewServiceChecker(taskID string, taskLogger *common.TaskLogger) *ServiceChecker {
+func NewServiceChecker(taskID string, project string, taskLogger *common.TaskLogger) *ServiceChecker {
 	return &ServiceChecker{
 		taskID:     taskID,
+		project:    project,
 		taskLogger: taskLogger,
 	}
 }
@@ -37,6 +52,18 @@ func (c *ServiceChecker) CheckServicesReady(ctx context.Context, services []stri
 	}
 	select {
 	case <-ctx.Done():
+		// 取消时执行缩容操作
+		if c.taskLogger != nil {
+			c.taskLogger.WriteStep("checkService", "WARNING", "检测到取消操作，触发缩容回收资源")
+		}
+		// 使用新的上下文执行缩容，避免被取消
+		scaleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+		if err := c.scaleDownFailedControllers(scaleCtx, namespace, "checkService"); err != nil {
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("取消时执行缩容操作失败: %v", err))
+			}
+		}
 		return ctx.Err()
 	case <-time.After(15 * time.Second):
 	}
@@ -61,25 +88,35 @@ func (c *ServiceChecker) isPodNormalState(status string) bool {
 	return false
 }
 
+// ScaleDownNamespace 导出的缩容方法，供外部调用
+func (c *ServiceChecker) ScaleDownNamespace(ctx context.Context, namespace string) error {
+	return c.scaleDownFailedControllers(ctx, namespace, "checkService")
+}
+
+// ScaleDownNamespaceWithStep 导出的缩容方法，可指定步骤名称
+func (c *ServiceChecker) ScaleDownNamespaceWithStep(ctx context.Context, namespace string, stepType string) error {
+	return c.scaleDownFailedControllers(ctx, namespace, stepType)
+}
+
 // scaleDownFailedControllers 缩容命名空间下所有控制器到0个副本
-func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespace string) error {
+func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespace string, stepType string) error {
 	if c.taskLogger != nil {
-		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("=== 开始执行缩容操作 ==="))
-		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容目标命名空间: %s (将缩容所有控制器)", namespace))
+		c.taskLogger.WriteStep(stepType, "ERROR", fmt.Sprintf("=== 开始执行缩容操作 ==="))
+		c.taskLogger.WriteStep(stepType, "ERROR", fmt.Sprintf("缩容目标命名空间: %s (将缩容所有控制器)", namespace))
 	}
 
 	// 获取命名空间下所有控制器
 	allControllers, err := c.getAllControllers(ctx, namespace)
 	if err != nil {
 		if c.taskLogger != nil {
-			c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("获取控制器列表失败: %v", err))
+			c.taskLogger.WriteStep(stepType, "ERROR", fmt.Sprintf("获取控制器列表失败: %v", err))
 		}
 		return err
 	}
 
 	if len(allControllers) == 0 {
 		if c.taskLogger != nil {
-			c.taskLogger.WriteStep("checkService", "WARNING", "没有发现需要缩容的控制器")
+			c.taskLogger.WriteStep(stepType, "WARNING", "没有发现需要缩容的控制器")
 		}
 		return nil
 	}
@@ -87,7 +124,7 @@ func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespa
 	// 缩容所有控制器
 	for controllerType, controllers := range allControllers {
 		if c.taskLogger != nil {
-			c.taskLogger.WriteStep("checkService", "INFO", fmt.Sprintf("开始缩容 %s: %v", controllerType, controllers))
+			c.taskLogger.WriteStep(stepType, "INFO", fmt.Sprintf("开始缩容 %s: %v", controllerType, controllers))
 		}
 
 		switch controllerType {
@@ -95,7 +132,7 @@ func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespa
 			for _, name := range controllers {
 				if err := c.scaleDownSpecificDeployment(ctx, namespace, name); err != nil {
 					if c.taskLogger != nil {
-						c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容Deployment %s 失败: %v", name, err))
+						c.taskLogger.WriteStep(stepType, "ERROR", fmt.Sprintf("缩容Deployment %s 失败: %v", name, err))
 					}
 				}
 			}
@@ -103,7 +140,7 @@ func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespa
 			for _, name := range controllers {
 				if err := c.scaleDownSpecificReplicaSet(ctx, namespace, name); err != nil {
 					if c.taskLogger != nil {
-						c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容ReplicaSet %s 失败: %v", name, err))
+						c.taskLogger.WriteStep(stepType, "ERROR", fmt.Sprintf("缩容ReplicaSet %s 失败: %v", name, err))
 					}
 				}
 			}
@@ -111,7 +148,7 @@ func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespa
 			for _, name := range controllers {
 				if err := c.scaleDownSpecificStatefulSet(ctx, namespace, name); err != nil {
 					if c.taskLogger != nil {
-						c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容StatefulSet %s 失败: %v", name, err))
+						c.taskLogger.WriteStep(stepType, "ERROR", fmt.Sprintf("缩容StatefulSet %s 失败: %v", name, err))
 					}
 				}
 			}
@@ -119,7 +156,7 @@ func (c *ServiceChecker) scaleDownFailedControllers(ctx context.Context, namespa
 	}
 
 	if c.taskLogger != nil {
-		c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("=== 缩容操作执行完成 ==="))
+		c.taskLogger.WriteStep(stepType, "ERROR", fmt.Sprintf("=== 缩容操作执行完成 ==="))
 	}
 	return nil
 }
@@ -644,6 +681,18 @@ func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace st
 		// 检查是否超时或取消
 		select {
 		case <-ctx.Done():
+			// 取消时执行缩容操作
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "WARNING", "检测到取消操作，触发缩容回收资源")
+			}
+			// 使用新的上下文执行缩容，避免被取消
+			scaleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := c.scaleDownFailedControllers(scaleCtx, namespace, "checkService"); err != nil {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("取消时执行缩容操作失败: %v", err))
+				}
+			}
 			return ctx.Err()
 		default:
 		}
@@ -667,7 +716,7 @@ func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace st
 				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("!!! 第一阶段等待超时，触发缩容操作 !!!"))
 				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("超时详情: 等待pod Running状态超时，非Running的pod: %s", strings.Join(nonRunningPods, ", ")))
 			}
-			if err := c.scaleDownFailedControllers(ctx, namespace); err != nil {
+			if err := c.scaleDownFailedControllers(ctx, namespace, "checkService"); err != nil {
 				if c.taskLogger != nil {
 					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("执行缩容操作时出错: %v", err))
 				}
@@ -705,7 +754,7 @@ func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace st
 			}
 
 			// 对失败的控制器进行缩容到0个副本
-			if err := c.scaleDownFailedControllers(ctx, namespace); err != nil {
+			if err := c.scaleDownFailedControllers(ctx, namespace, "checkService"); err != nil {
 				if c.taskLogger != nil {
 					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("缩容失败的控制器时出错: %v", err))
 				}
@@ -757,6 +806,17 @@ func (c *ServiceChecker) waitForAllPodsRunning(ctx context.Context, namespace st
 		// 等待下一次检查
 		select {
 		case <-ctx.Done():
+			// 取消时执行缩容操作
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "WARNING", "检测到取消操作，触发缩容回收资源")
+			}
+			scaleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := c.scaleDownFailedControllers(scaleCtx, namespace, "checkService"); err != nil {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("取消时执行缩容操作失败: %v", err))
+				}
+			}
 			return ctx.Err()
 		case <-time.After(checkInterval):
 		}
@@ -810,6 +870,18 @@ func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace str
 		// 检查是否超时或取消
 		select {
 		case <-ctx.Done():
+			// 取消时执行缩容操作
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "WARNING", "检测到取消操作，触发缩容回收资源")
+			}
+			// 使用新的上下文执行缩容，避免被取消
+			scaleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := c.scaleDownFailedControllers(scaleCtx, namespace, "checkService"); err != nil {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("取消时执行缩容操作失败: %v", err))
+				}
+			}
 			return ctx.Err()
 		default:
 		}
@@ -833,7 +905,7 @@ func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace str
 				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("!!! 第二阶段健康检查超时，触发缩容操作 !!!"))
 				c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("超时详情: 健康检查超时，未就绪的pod: %s", strings.Join(failedPods, ", ")))
 			}
-			if err := c.scaleDownFailedControllers(ctx, namespace); err != nil {
+			if err := c.scaleDownFailedControllers(ctx, namespace, "checkService"); err != nil {
 				if c.taskLogger != nil {
 					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("执行缩容操作时出错: %v", err))
 				}
@@ -912,6 +984,17 @@ func (c *ServiceChecker) checkPodsHealthiness(ctx context.Context, namespace str
 		// 等待下一轮检查
 		select {
 		case <-ctx.Done():
+			// 取消时执行缩容操作
+			if c.taskLogger != nil {
+				c.taskLogger.WriteStep("checkService", "WARNING", "检测到取消操作，触发缩容回收资源")
+			}
+			scaleCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancel()
+			if err := c.scaleDownFailedControllers(scaleCtx, namespace, "checkService"); err != nil {
+				if c.taskLogger != nil {
+					c.taskLogger.WriteStep("checkService", "ERROR", fmt.Sprintf("取消时执行缩容操作失败: %v", err))
+				}
+			}
 			return ctx.Err()
 		case <-time.After(checkInterval):
 		}
@@ -1096,7 +1179,15 @@ func (c *ServiceChecker) checkSinglePodHealth(ctx context.Context, namespace, po
 	cmdCtx, cancel := context.WithTimeout(ctx, 2*time.Second)
 	defer cancel()
 
-	cmdArgs := []string{"exec", "-n", namespace, podName, "-c", "filebeat", "--", "curl", "-s", "http://127.0.0.1:8080/actuator/health"}
+	// 根据项目判断是否使用filebeat容器
+	var cmdArgs []string
+	if c.needFilebeat() {
+		// 默认使用filebeat容器
+		cmdArgs = []string{"exec", "-n", namespace, podName, "-c", "filebeat", "--", "curl", "-s", "http://127.0.0.1:8080/actuator/health"}
+	} else {
+		// 某些项目只有一个容器，不需要指定容器名
+		cmdArgs = []string{"exec", "-n", namespace, podName, "--", "curl", "-s", "http://127.0.0.1:8080/actuator/health"}
+	}
 	cmd := exec.CommandContext(cmdCtx, "kubectl", cmdArgs...)
 	output, err := cmd.CombinedOutput()
 
@@ -1236,8 +1327,8 @@ func (c *ServiceChecker) getPodName(ctx context.Context, namespace, serviceName 
 }
 
 // CheckServices 检查服务列表（包装函数，无日志记录）
-func CheckServices(ctx context.Context, services []string, namespace string) error {
+func CheckServices(ctx context.Context, services []string, namespace string, project string) error {
 	// 使用空的taskID和nil logger，因为这是包装函数
-	checker := NewServiceChecker("", nil)
+	checker := NewServiceChecker("", project, nil)
 	return checker.CheckServicesReady(ctx, services, namespace)
 }

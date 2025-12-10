@@ -89,22 +89,41 @@ func SendFeishuCard(webhookURL, project, tag, status, startTime, endTime, deploy
 	return nil
 }
 
+// getDeployTypeLabel 获取部署类型标签
+func getDeployTypeLabel(deployType string) string {
+	switch deployType {
+	case "web":
+		return "前端"
+	case "single", "double":
+		return "后端"
+	default:
+		return ""
+	}
+}
+
 // buildTaskCard 构建任务卡片
 func buildTaskCard(project, tag, status, startTime, endTime, deployType, category, projectName string) FeishuCardMessage {
+	// 获取部署类型标签
+	typeLabel := getDeployTypeLabel(deployType)
+	typeSuffix := ""
+	if typeLabel != "" {
+		typeSuffix = "-" + typeLabel
+	}
+
 	// 根据状态设置颜色和标题
 	var template, title, statusText string
 	switch status {
 	case "complete":
 		template = "green"
-		title = fmt.Sprintf("🎉 【%s】部署成功", projectName)
+		title = fmt.Sprintf("🎉 【%s%s】部署成功", projectName, typeSuffix)
 		statusText = "✅ 部署完成"
 	case "failed":
 		template = "red"
-		title = fmt.Sprintf("❌ 【%s】部署失败", projectName)
+		title = fmt.Sprintf("❌ 【%s%s】部署失败", projectName, typeSuffix)
 		statusText = "❌ 部署失败"
 	case "cancel":
 		template = "grey"
-		title = fmt.Sprintf("⏹️ 【%s】部署取消", projectName)
+		title = fmt.Sprintf("⏹️ 【%s%s】部署取消", projectName, typeSuffix)
 		statusText = "⏹️ 部署取消"
 	default:
 		template = "blue"
@@ -183,11 +202,11 @@ func buildTaskCard(project, tag, status, startTime, endTime, deployType, categor
 			},
 		})
 	} else {
-		// 单副本：显示空白
+		// 单副本/前端：显示部署类型
 		fields = append(fields, FeishuField{
 			IsShort: true,
 			Text: FeishuText{
-				Content: "** **\n ",
+				Content: fmt.Sprintf("**部署类型**\n%s", typeLabel),
 				Tag:     "lark_md",
 			},
 		})
