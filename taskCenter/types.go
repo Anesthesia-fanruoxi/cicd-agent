@@ -2,9 +2,10 @@ package taskCenter
 
 // UpdateRequest 更新请求结构
 type UpdateRequest struct {
-	Project  string `json:"project" binding:"required"`
-	Type     string `json:"type"`
-	Category string `json:"category,omitempty"`
+	Project     string `json:"project" binding:"required"`
+	Type        string `json:"type"`
+	Category    string `json:"category,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // CallbackRequest 回调请求结构
@@ -29,6 +30,7 @@ type RemoteCallRequest struct {
 	CallbackURL string `json:"callback_url"`
 	Type        string `json:"type,omitempty"` // double/single/web
 	Category    string `json:"category,omitempty"`
+	Description string `json:"description,omitempty"`
 }
 
 // CancelRequest 取消任务请求结构

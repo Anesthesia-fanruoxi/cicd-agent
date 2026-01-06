@@ -242,6 +242,7 @@ func callRemoteAPI(req UpdateRequest) error {
 		CallbackURL: callbackURL,
 		Type:        req.Type,
 		Category:    req.Category,
+		Description: req.Description,
 	}
 
 	// 序列化请求
