@@ -111,7 +111,7 @@ func (r *SingleVersionProcessor) ProcessSingleVersionDeployment() error {
 	common.AppLogger.Info("单版本部署流程完成")
 	endTime := time.Now().Format("2006-01-02 15:04:05")
 
-	if err := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "complete", r.opsURL, r.proURL, r.stepDurations); err != nil {
+	if err := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "complete", r.opsURL, r.proURL); err != nil {
 		common.AppLogger.Error("发送任务完成通知失败:", err)
 	}
 
@@ -417,7 +417,7 @@ func (r *SingleVersionProcessor) sendFailureNotifications() {
 	endTime := time.Now().Format("2006-01-02 15:04:05")
 
 	// 发送任务失败通知
-	if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "failed", r.opsURL, r.proURL, r.stepDurations); notifyErr != nil {
+	if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "failed", r.opsURL, r.proURL); notifyErr != nil {
 		common.AppLogger.Error("发送任务失败通知失败:", notifyErr)
 	}
 
@@ -432,7 +432,7 @@ func (r *SingleVersionProcessor) sendCancelNotifications() {
 	endTime := time.Now().Format("2006-01-02 15:04:05")
 
 	// 发送任务取消通知
-	if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "cancel", r.opsURL, r.proURL, r.stepDurations); notifyErr != nil {
+	if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "cancel", r.opsURL, r.proURL); notifyErr != nil {
 		common.AppLogger.Error("发送任务取消通知失败:", notifyErr)
 	}
 

@@ -99,7 +99,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 		common.SendStepNotification(r.taskID, 7, "downProduct", "下载产物", "failed", err.Error(), r.project, r.tag)
 		// 发送任务失败通知
 		endTime := time.Now().Format("2006-01-02 15:04:05")
-		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "failed", r.opsURL, r.proURL, r.stepDurations); notifyErr != nil {
+		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "failed", r.opsURL, r.proURL); notifyErr != nil {
 			common.AppLogger.Error("发送失败通知失败:", notifyErr)
 		}
 		// 发送飞书失败通知
@@ -121,7 +121,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 		common.SendStepNotification(r.taskID, 8, "extractProduct", "解压产物", "failed", err.Error(), r.project, r.tag)
 		// 发送任务失败通知
 		endTime := time.Now().Format("2006-01-02 15:04:05")
-		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "failed", r.opsURL, r.proURL, r.stepDurations); notifyErr != nil {
+		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "failed", r.opsURL, r.proURL); notifyErr != nil {
 			common.AppLogger.Error("发送失败通知失败:", notifyErr)
 		}
 		// 发送飞书失败通知
@@ -143,7 +143,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 		common.SendStepNotification(r.taskID, 9, "backupCurrent", "备份当前版本", "failed", err.Error(), r.project, r.tag)
 		// 发送任务失败通知
 		endTime := time.Now().Format("2006-01-02 15:04:05")
-		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "failed", r.opsURL, r.proURL, r.stepDurations); notifyErr != nil {
+		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "failed", r.opsURL, r.proURL); notifyErr != nil {
 			common.AppLogger.Error("发送失败通知失败:", notifyErr)
 		}
 		// 发送飞书失败通知
@@ -175,7 +175,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 		}
 		// 发送任务失败通知
 		endTime := time.Now().Format("2006-01-02 15:04:05")
-		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "failed", r.opsURL, r.proURL, r.stepDurations); notifyErr != nil {
+		if notifyErr := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "failed", r.opsURL, r.proURL); notifyErr != nil {
 			common.AppLogger.Error("发送失败通知失败:", notifyErr)
 		}
 		// 发送飞书失败通知
@@ -191,7 +191,7 @@ func (r *RemoteProcessor) ProcessRemoteRequest() error {
 
 	// 发送任务完成通知
 	endTime := time.Now().Format("2006-01-02 15:04:05")
-	if err := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "complete", r.opsURL, r.proURL, r.stepDurations); err != nil {
+	if err := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "complete", r.opsURL, r.proURL); err != nil {
 		common.AppLogger.Error("发送任务完成通知失败:", err)
 	}
 
@@ -265,7 +265,7 @@ func (r *RemoteProcessor) ProcessCancelRequest() error {
 	endTime := time.Now().Format("2006-01-02 15:04:05")
 
 	// 发送取消通知
-	if err := common.SendTaskNotification(r.taskID, r.project, r.startedAt, "cancel", r.opsURL, r.proURL, r.stepDurations); err != nil {
+	if err := common.SendTaskNotification(r.taskID, r.project, r.projectName, r.deployType, r.startedAt, "cancel", r.opsURL, r.proURL); err != nil {
 		common.AppLogger.Error("发送取消通知失败:", err)
 	}
 

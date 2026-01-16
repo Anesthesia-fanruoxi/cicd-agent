@@ -19,18 +19,18 @@ type UnifiedNotificationData struct {
 	IsStep bool `json:"isset"` // true=步骤通知, false=任务通知
 
 	// 任务通知字段
-	ID            string                 `json:"id"`                       // 任务ID
-	Name          string                 `json:"name,omitempty"`           // 项目名称
-	Description   string                 `json:"description,omitempty"`    // 项目描述
-	GitURL        string                 `json:"git_url,omitempty"`        // Git仓库地址
-	OpsURL        string                 `json:"ops_feishu_url,omitempty"` // 运维飞书URL
-	FeishuURL     string                 `json:"pro_feishu_url,omitempty"` // 产品飞书URL
-	StartedAt     string                 `json:"started_at,omitempty"`     // 开始时间
-	Type          string                 `json:"type,omitempty"`           // 任务类型
-	FinishedAt    string                 `json:"finished_at"`              // 结束时间
-	Status        string                 `json:"status,omitempty"`         // 状态 (running/complete/cancel)
-	Remote        string                 `json:"remote,omitempty"`         // 来源（agent/server），此处固定为agent
-	StepDurations map[string]interface{} `json:"step_durations,omitempty"` // 任务各步骤耗时（秒）
+	ID           string `json:"id"`                      // 任务ID
+	Name         string `json:"name,omitempty"`          // 项目简称
+	ProjectName  string `json:"project_name,omitempty"`  // 项目名称
+	Description  string `json:"description,omitempty"`   // 任务描述步
+	GitURL       string `json:"git_url,omitempty"`       // Git仓库地址
+	UpdateFeishu string `json:"update_feishu,omitempty"` // 发版通知地址
+	NotifyFeishu string `json:"notify_feishu,omitempty"` // 普通通知地址
+	StartedAt    string `json:"started_at,omitempty"`    // 开始时间
+	Type         string `json:"type,omitempty"`          // 任务类型
+	TypeName     string `json:"type_name,omitempty"`     // 任务类型中文名称（前端/后端）
+	FinishedAt   string `json:"finished_at"`             // 结束时间
+	Status       string `json:"status,omitempty"`        // 状态 (running/complete/cancel)
 
 	// 步骤通知字段
 	Step           int     `json:"step,omitempty"`             // 步骤编号
@@ -39,8 +39,9 @@ type UnifiedNotificationData struct {
 	StepFinishedAt string  `json:"step_finished_at,omitempty"` // 步骤完成时间
 	StepName       string  `json:"step_name,omitempty"`        // 步骤名称
 	StepStatus     string  `json:"step_status,omitempty"`      // 步骤状态 (success/failed/cancel)
-	Duration       float64 `json:"duration"`                   // 持续时间(秒，保留2位小数)
-	LastDuration   float64 `json:"last_duration"`              // 上一个步骤的耗时(秒，保留2位小数)
+	Duration       float64 `json:"duration,omitempty"`         // 持续时间(秒)
+	Remote         string  `json:"remote,omitempty"`           // 发起端标识（此处固定为agent）
+	LastDuration   float64 `json:"last_duration,omitempty"`    // 上次该步骤耗时(秒)
 	EstimatedEnd   string  `json:"estimated_end,omitempty"`    // 预计结束时间
 }
 
@@ -267,7 +268,7 @@ func getNotifyURL() string {
 }
 
 // SendTaskNotification 发送任务级别通知（最终完成/取消/失败）
-func SendTaskNotification(taskID, name, startedAt, status string, opsURL, proURL string, stepDurations map[string]interface{}) error {
+func SendTaskNotification(taskID, name, projectName, taskType, startedAt, status string, updateFeishu, notifyFeishu string) error {
 	// 获取通知URL
 	notifyURL := getNotifyURL()
 	if notifyURL == "" {
@@ -284,18 +285,23 @@ func SendTaskNotification(taskID, name, startedAt, status string, opsURL, proURL
 		normStatus = "complete"
 	}
 
+	// 获取任务类型中文名称
+	typeName := getTypeName(taskType)
+
 	// 构建任务通知数据（IsStep=false）
 	notificationData := UnifiedNotificationData{
-		IsStep:        false,
-		ID:            taskID,
-		Name:          name,
-		StartedAt:     startedAt,
-		FinishedAt:    time.Now().Format("2006-01-02 15:04:05"),
-		Status:        normStatus,
-		Remote:        "agent",
-		OpsURL:        opsURL,
-		FeishuURL:     proURL,
-		StepDurations: stepDurations,
+		IsStep:       false,
+		ID:           taskID,
+		Name:         name,
+		ProjectName:  projectName,
+		Type:         taskType,
+		TypeName:     typeName,
+		StartedAt:    startedAt,
+		FinishedAt:   time.Now().Format("2006-01-02 15:04:05"),
+		Status:       normStatus,
+		Remote:       "agent",
+		UpdateFeishu: updateFeishu,
+		NotifyFeishu: notifyFeishu,
 	}
 
 	// 序列化为JSON
@@ -351,4 +357,16 @@ func SendTaskNotification(taskID, name, startedAt, status string, opsURL, proURL
 
 	//AppLogger.Info("任务通知发送成功")
 	return nil
+}
+
+// getTypeName 获取任务类型的中文名称
+func getTypeName(taskType string) string {
+	switch taskType {
+	case "web":
+		return "前端"
+	case "double", "single":
+		return "后端"
+	default:
+		return "后端"
+	}
 }
